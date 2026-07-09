@@ -8,9 +8,14 @@ import { InMemoryBroadcaster } from "./realtime/broadcaster.js";
 
 // Teams 클라이언트(데스크톱/웹)에서의 iframe 임베드만 허용하는 CSP.
 // 직접 접속(최상위 탐색)은 막지 않으며, 제3자 사이트의 클릭재킹만 차단한다.
+// Microsoft 공식 권장 프레이밍 도메인 전체를 포함한다. 특히 신규 통합 도메인
+// *.cloud.microsoft(현행 Teams 웹 클라이언트가 여기서 임베드)가 빠지면 탭이 차단된다.
 const FRAME_ANCESTORS_CSP =
-  "frame-ancestors 'self' https://teams.microsoft.com https://*.teams.microsoft.com " +
-  "https://*.microsoft365.com https://*.office.com";
+  "frame-ancestors 'self' " +
+  "https://teams.microsoft.com https://*.teams.microsoft.com " +
+  "https://*.teams.microsoft.us https://local.teams.office.com " +
+  "https://*.office.com https://*.microsoft365.com " +
+  "https://*.cloud.microsoft https://*.skype.com";
 
 /**
  * Express 앱을 구성한다.

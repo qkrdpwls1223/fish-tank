@@ -30,6 +30,8 @@ describe("createApp — staticDir 서빙", () => {
     expect(res.text).toContain("공유 어항");
     expect(res.headers["content-security-policy"]).toContain("frame-ancestors");
     expect(res.headers["content-security-policy"]).toContain("teams.microsoft.com");
+    // 현행 Teams 웹 클라이언트의 통합 도메인이 반드시 포함돼야 iframe 이 차단되지 않는다.
+    expect(res.headers["content-security-policy"]).toContain("*.cloud.microsoft");
   });
 
   it("정적 자산은 그대로 서빙한다", async () => {
