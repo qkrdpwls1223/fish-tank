@@ -1,4 +1,4 @@
-# 아키텍처 개요 (공유 어항)
+# 아키텍처 개요 (랜선어항)
 
 SPEC: `.moai/specs/SPEC-TANK-001/spec.md` · 상세 API 형식: `docs/api.md`
 

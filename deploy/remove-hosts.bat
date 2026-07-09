@@ -1,5 +1,5 @@
 @echo off
-REM 공유 어항 - hosts 항목 제거 도우미 (더블클릭 실행)
+REM 랜선어항 - hosts 항목 제거 도우미 (더블클릭 실행)
 REM add-hosts.bat 로 추가한 fishtank.fllab.internal 줄을 hosts 에서 제거한다.
 REM 관리자 권한이 필요하므로, 권한이 없으면 UAC 로 자동 상승 후 재실행한다.
 

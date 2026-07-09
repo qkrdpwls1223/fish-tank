@@ -1,5 +1,5 @@
 @echo off
-REM 공유 어항 - hosts 등록 도우미 (더블클릭 실행)
+REM 랜선어항 - hosts 등록 도우미 (더블클릭 실행)
 REM 관리자 권한이 필요하므로, 권한이 없으면 UAC 로 자동 상승 후 재실행한다.
 REM hosts 에 fishtank.fllab.internal 항목이 없을 때만 추가한다(중복 방지).
 
@@ -35,7 +35,7 @@ if %errorlevel% equ 0 (
     echo [완료] hosts 에 다음 줄을 추가했습니다:
     echo     %ENTRY%
     echo.
-    echo 이제 Teams 에서 "공유 어항" 앱을 열 수 있습니다.
+    echo 이제 Teams 에서 "랜선어항" 앱을 열 수 있습니다.
 ) else (
     echo [실패] hosts 파일 쓰기에 실패했습니다. 관리자 권한을 확인하세요.
 )

@@ -1,4 +1,4 @@
-# API 레퍼런스 (공유 어항 서버)
+# API 레퍼런스 (랜선어항 서버)
 
 SPEC: `.moai/specs/SPEC-TANK-001/spec.md`
 

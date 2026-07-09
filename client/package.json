@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "공유 어항 프론트엔드 (React + Vite) — Teams 탭 부트스트랩, SSO, 드로잉/어항 렌더링",
+  "description": "랜선어항 프론트엔드 (React + Vite) — Teams 탭 부트스트랩, SSO, 드로잉/어항 렌더링",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

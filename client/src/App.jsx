@@ -97,7 +97,7 @@ export default function App({ authenticate = defaultAuthenticate, tankProps = {}
           pointerEvents: "none",
         }}
       >
-        <h1 style={{ fontSize: 20, margin: 0 }}>공유 어항</h1>
+        <h1 style={{ fontSize: 20, margin: 0 }}>랜선어항</h1>
         {state.status === "authenticated" && state.identity && (
           <p style={{ margin: "2px 0 0", fontSize: 14 }}>
             안녕하세요, {state.identity.displayName}님

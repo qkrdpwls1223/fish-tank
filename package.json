@@ -2,7 +2,7 @@
   "name": "fish-tank",
   "version": "0.1.0",
   "private": true,
-  "description": "공유 어항 — Microsoft Teams 내장 탭 앱 (임직원이 손으로 그린 물고기가 실시간으로 헤엄치는 공용 어항)",
+  "description": "랜선어항 — Microsoft Teams 내장 탭 앱 (임직원이 손으로 그린 물고기가 실시간으로 헤엄치는 공용 어항)",
   "type": "module",
   "workspaces": [
     "client",
