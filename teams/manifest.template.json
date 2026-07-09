@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "7f3c9a52-6e0d-4b1a-9c2e-51d8aa04f7b3",
+  "developer": {
+    "name": "FLLab",
+    "websiteUrl": "https://fishtank.fllab.internal/",
+    "privacyUrl": "https://fishtank.fllab.internal/",
+    "termsOfUseUrl": "https://fishtank.fllab.internal/"
+  },
+  "name": {
+    "short": "공유 어항",
+    "full": "공유 어항 — 손으로 그린 물고기가 헤엄치는 실시간 어항"
+  },
+  "description": {
+    "short": "직접 그린 물고기를 공용 어항에 풀어놓아요",
+    "full": "임직원이 직접 손으로 그린 물고기를 공용 어항에 풀어놓고, 동료들의 물고기와 함께 실시간으로 헤엄치는 모습을 감상하고 먹이를 주는 사내 휴식 공간입니다."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#0E7C8C",
+  "staticTabs": [
+    {
+      "entityId": "fishtank-main",
+      "name": "어항",
+      "contentUrl": "https://fishtank.fllab.internal/",
+      "websiteUrl": "https://fishtank.fllab.internal/",
+      "scopes": ["personal"]
+    }
+  ],
+  "permissions": ["identity"],
+  "validDomains": ["fishtank.fllab.internal"],
+  "webApplicationInfo": {
+    "id": "__TEAMS_APP_CLIENT_ID__",
+    "resource": "api://fishtank.fllab.internal/__TEAMS_APP_CLIENT_ID__"
+  }
+}

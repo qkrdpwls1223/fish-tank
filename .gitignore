@@ -212,3 +212,6 @@ dist-ssr/
 .vercel/
 .netlify/
 .firebase/
+# Teams 앱 패키지 빌드 산출물 (teams/build.mjs 가 생성)
+teams/dist/
+teams/fishtank-teams.zip
