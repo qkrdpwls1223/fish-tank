@@ -6,6 +6,12 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // 개발 서버에서 API/WebSocket 요청을 백엔드(:3000)로 전달한다.
+    // 클라이언트는 /api, /realtime 를 상대 경로로 호출하므로 프록시가 필요하다.
+    proxy: {
+      "/api": { target: "http://localhost:3000", changeOrigin: true },
+      "/realtime": { target: "ws://localhost:3000", ws: true },
+    },
   },
   test: {
     environment: "jsdom",

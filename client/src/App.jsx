@@ -12,6 +12,16 @@ import FishTank from "./tank/FishTank.jsx";
 // 테스트에서는 authenticate prop 을 주입해 이 경로를 대체한다. (REQ-AUTH-001/002)
 // 토큰은 쓰기 작업(물고기 생성) 제출에 사용하므로 신원과 함께 반환한다.
 async function defaultAuthenticate() {
+  // 개발 전용 우회: Teams 밖(브라우저)에서 로컬 시험용. 개발 빌드 + 플래그일 때만.
+  // 프로덕션 빌드에서는 import.meta.env.DEV 가 false 이므로 절대 활성화되지 않는다.
+  if (import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS) {
+    return {
+      userId: "dev-user-local",
+      displayName: "개발자(로컬)",
+      token: "dev-bypass-token",
+    };
+  }
+
   const token = await acquireTeamsSsoToken();
   const res = await fetch("/api/me", {
     headers: { Authorization: `Bearer ${token}` },
@@ -54,42 +64,156 @@ export default function App({ authenticate = defaultAuthenticate, tankProps = {}
   const writeEnabled = canWrite(state);
 
   return (
-    <main>
-      <h1>공유 어항</h1>
-
-      {/* 인증 상태별 안내 */}
-      {state.status === "authenticating" && <p>인증 중…</p>}
-
-      {state.status === "authenticated" && state.identity && (
-        <p>안녕하세요, {state.identity.displayName}님</p>
+    <main
+      style={{
+        position: "fixed",
+        inset: 0,
+        overflow: "hidden",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+      }}
+    >
+      {/* 어항: 인증 완료 시 화면 전체 배경으로 채운다 (REQ-RT-004) */}
+      {state.status === "authenticated" && (
+        <FishTank token={token} {...tankProps} />
       )}
 
-      {state.status === "error" && (
-        <div role="alert">
-          <p>로그인에 실패했습니다. 다시 시도해 주세요.</p>
-          <button type="button" onClick={runAuth}>
-            다시 시도
-          </button>
+      {/* 상단 좌측: 타이틀 + 인사 (플로팅) */}
+      <div
+        style={{
+          position: "absolute",
+          top: 14,
+          left: 16,
+          zIndex: 10,
+          color: "#fff",
+          textShadow: "0 1px 4px rgba(0,0,0,0.55)",
+          pointerEvents: "none",
+        }}
+      >
+        <h1 style={{ fontSize: 20, margin: 0 }}>공유 어항</h1>
+        {state.status === "authenticated" && state.identity && (
+          <p style={{ margin: "2px 0 0", fontSize: 14 }}>
+            안녕하세요, {state.identity.displayName}님
+          </p>
+        )}
+      </div>
+
+      {/* 인증 중 / 오류 상태: 화면 중앙 오버레이 */}
+      {(state.status === "authenticating" || state.status === "error") && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "#bfe6e4",
+            zIndex: 20,
+          }}
+        >
+          {state.status === "authenticating" && <p>인증 중…</p>}
+          {state.status === "error" && (
+            <div
+              role="alert"
+              style={{
+                background: "#fff",
+                borderRadius: 12,
+                padding: "20px 24px",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+                textAlign: "center",
+              }}
+            >
+              <p>로그인에 실패했습니다. 다시 시도해 주세요.</p>
+              <button type="button" onClick={runAuth}>
+                다시 시도
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {/* 쓰기 액션: 인증 완료 상태에서만 활성화 (REQ-AUTH-004) */}
-      <button
-        type="button"
-        disabled={!writeEnabled}
-        onClick={() => setComposing(true)}
+      {/* 하단 중앙: 물고기 그리기 플로팅 버튼 (항상 렌더, 미인증 시 비활성 — REQ-AUTH-004) */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          bottom: 20,
+          transform: "translateX(-50%)",
+          zIndex: 10,
+        }}
       >
-        물고기 그리기
-      </button>
+        <button
+          type="button"
+          disabled={!writeEnabled}
+          onClick={() => setComposing(true)}
+          style={{
+            border: "none",
+            borderRadius: 999,
+            padding: "14px 28px",
+            fontSize: 16,
+            fontWeight: 600,
+            cursor: writeEnabled ? "pointer" : "not-allowed",
+            background: writeEnabled ? "#1d4ed8" : "#9aa3ad",
+            color: "#fff",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
+          }}
+        >
+          물고기 그리기
+        </button>
+      </div>
 
-      {/* 등록 UI: 인증 완료 + 사용자가 그리기 시작을 누른 경우에만 노출 */}
+      {/* 그리기 모달: 인증 완료 + 그리기 시작 시에만 노출 */}
       {composing && writeEnabled && (
-        <FishComposer authState={state} token={token} />
-      )}
-
-      {/* 어항: 인증 완료 시 진입 스냅샷 로드 + 실시간 반영 (REQ-RT-004) */}
-      {state.status === "authenticated" && (
-        <FishTank token={token} {...tankProps} />
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="물고기 그리기"
+          onClick={() => setComposing(false)}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 100,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          {/* 카드 내부 클릭은 닫히지 않도록 전파 차단 */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff",
+              borderRadius: 14,
+              padding: 20,
+              maxWidth: 560,
+              width: "100%",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              position: "relative",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.3)",
+            }}
+          >
+            <button
+              type="button"
+              aria-label="닫기"
+              onClick={() => setComposing(false)}
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 12,
+                border: "none",
+                background: "transparent",
+                fontSize: 20,
+                cursor: "pointer",
+                lineHeight: 1,
+              }}
+            >
+              ✕
+            </button>
+            <FishComposer authState={state} token={token} />
+          </div>
+        </div>
       )}
     </main>
   );

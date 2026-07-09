@@ -3,6 +3,7 @@ import {
   initialDrawingState,
   drawingReducer,
   toDrawing,
+  TAIL_FOLD_FRACTION,
 } from "./drawingModel.js";
 
 // 포인터 이벤트에서 캔버스 상대 좌표를 계산한다(마우스/터치/펜 공통, REQ-DRAW-001).
@@ -63,6 +64,24 @@ export default function DrawingCanvas({
       }
       ctx.stroke();
     }
+
+    // 꼬리 접힘 가이드라인(점선). 저장되는 그림(strokes)에는 포함되지 않는 시각 가이드다.
+    // 이 선의 왼쪽에 그린 부분이 어항에서 꼬리로 파닥거린다.
+    const foldX = Math.round(width * TAIL_FOLD_FRACTION);
+    ctx.save();
+    ctx.setLineDash([6, 6]);
+    ctx.strokeStyle = "#9aa3ad";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(foldX, 0);
+    ctx.lineTo(foldX, height);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#9aa3ad";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("← 꼬리", 6, 16);
+    ctx.fillText("몸통·머리 →", foldX + 6, 16);
+    ctx.restore();
   }, [state, width, height]);
 
   const handleDown = useCallback(
@@ -103,8 +122,9 @@ export default function DrawingCanvas({
       />
       {/* 대체 안내: 캔버스는 포인터(마우스/터치/펜) 전용이며, 아래 컨트롤은 키보드로 조작 가능하다(NFR-A11Y-001). */}
       <p id="draw-canvas-desc">
-        마우스나 터치로 물고기를 자유롭게 그려 주세요. 아래 실행 취소·초기화 버튼으로
-        마지막 획을 되돌리거나 전체를 지울 수 있어요.
+        마우스나 터치로 물고기를 자유롭게 그려 주세요. 점선 왼쪽에 그린 부분이
+        어항에서 꼬리처럼 파닥거립니다. 아래 실행 취소·초기화 버튼으로 마지막 획을
+        되돌리거나 전체를 지울 수 있어요.
       </p>
       <div>
         <button type="button" onClick={() => dispatch({ type: "UNDO" })}>

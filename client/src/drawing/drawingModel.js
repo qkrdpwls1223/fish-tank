@@ -19,6 +19,10 @@ const DEFAULT_COLOR = "#000000";
 const DEFAULT_STROKE_WIDTH = 3;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
+// 꼬리 파닥임 접힘선 위치(그림 너비 대비 비율). 이 선의 왼쪽이 꼬리로 간주되어
+// 어항에서 흔들린다. 그리기 캔버스의 점선 가이드와 렌더링이 같은 값을 공유한다.
+export const TAIL_FOLD_FRACTION = 0.4;
+
 // 초기 상태: 확정 스트로크 목록 + 진행 중 스트로크(current).
 export function initialDrawingState(width = 300, height = 200) {
   return { width, height, strokes: [], current: null };

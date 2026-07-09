@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { createApp } from "./app.js";
-import { createVerifierFromEnv } from "./auth/authConfig.js";
+import { resolveVerifier } from "./auth/devAuth.js";
 import { createPoolFromEnv } from "./db/pool.js";
 import { PgFishRepository } from "./fish/pgFishRepository.js";
 import { InMemoryBroadcaster } from "./realtime/broadcaster.js";
@@ -10,8 +10,9 @@ import { attachRealtime } from "./realtime/wsGateway.js";
 
 const port = Number(process.env.PORT) || 3000;
 
-// 환경 변수에서 Teams SSO 검증 함수를 구성해 앱에 주입한다.
-const verify = createVerifierFromEnv(process.env);
+// 환경 변수에서 검증 함수를 선택해 앱에 주입한다.
+// 기본은 실제 Teams SSO 검증이며, DEV_AUTH_BYPASS(비프로덕션)일 때만 개발 우회를 쓴다.
+const verify = resolveVerifier(process.env);
 // 환경 변수(DATABASE_URL)로 PostgreSQL 저장소를 구성해 주입한다 (REQ-PERSIST-001).
 const fishRepository = new PgFishRepository(createPoolFromEnv(process.env));
 // 실시간 브로드캐스터를 앱과 WS 게이트웨이가 공유한다 (REQ-RT-001/002).
