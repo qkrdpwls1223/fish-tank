@@ -8,9 +8,11 @@ describe("buildAuthParams", () => {
       TEAMS_TENANT_ID: "tenant-abc",
       TEAMS_APP_CLIENT_ID: "client-xyz",
     });
-    expect(params.issuer).toBe(
-      "https://login.microsoftonline.com/tenant-abc/v2.0"
-    );
+    // issuer 는 v2.0/v1.0 두 형태를 모두 허용한다.
+    expect(params.issuer).toEqual([
+      "https://login.microsoftonline.com/tenant-abc/v2.0",
+      "https://sts.windows.net/tenant-abc/",
+    ]);
     // audience 는 clientId 와 api://<clientId> 두 형태를 모두 허용한다.
     expect(params.audience).toEqual(["client-xyz", "api://client-xyz"]);
     expect(params.jwksUri).toBe(

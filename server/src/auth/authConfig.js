@@ -16,7 +16,13 @@ export function buildAuthParams(env) {
   if (!tenantId) throw new Error("환경 변수 TEAMS_TENANT_ID 가 필요합니다.");
   if (!clientId) throw new Error("환경 변수 TEAMS_APP_CLIENT_ID 가 필요합니다.");
 
-  const issuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
+  // issuer 는 배열로 허용한다: Teams SSO 토큰은 앱의 accessTokenAcceptedVersion 설정에
+  // 따라 v2.0(login.microsoftonline.com/.../v2.0) 또는 v1.0(sts.windows.net/...) 로 온다.
+  // 기본 앱 등록은 v1.0 을 발급하므로 두 형태를 모두 인정해야 한다.
+  const issuer = [
+    `https://login.microsoftonline.com/${tenantId}/v2.0`,
+    `https://sts.windows.net/${tenantId}/`,
+  ];
   const audience = [clientId, `api://${clientId}`];
   if (env.TEAMS_APP_ID_URI && !audience.includes(env.TEAMS_APP_ID_URI)) {
     audience.push(env.TEAMS_APP_ID_URI);
