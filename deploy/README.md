@@ -22,10 +22,12 @@ fish-tank 는 nginx 뒤(내부 HTTP 3000)에 배치하고 전용 PostgreSQL 을 
 추후 dnsmasq 를 복구하면 `address=/fishtank.fllab.internal/10.10.33.36`
 한 줄로 hosts 배포를 대체할 수 있다.)
 
-## 2. 인증서 준비
+## 2. 인증서 — 별도 작업 불필요
 
-`fishtank.fllab.internal` 용 인증서/키를 기존 nginx 의 인증서 디렉터리에 배치.
-사내 CA 또는 자체 CA 발급 — 루트 CA 는 각 PC 신뢰 저장소에 배포돼 있어야 한다.
+기존 nginx 에 와일드카드 인증서 `fllab.internal.crt/key`(`_ssl-fllab.inc`)가 이미
+있어 `fishtank.fllab.internal` 을 그대로 커버한다. 새 인증서 발급 불필요.
+(루트 CA 는 이미 각 PC 신뢰 저장소에 배포돼 있는 것으로 가정 — 기존 *.fllab.internal
+서비스들이 동작 중이므로.)
 
 ## 3. 소스 반입 및 기동
 
@@ -44,11 +46,19 @@ docker compose ps       # fishtank-app healthy 확인
 
 ## 4. nginx 가상 호스트 추가
 
-1. `deploy/nginx-fishtank.conf` 를 기존 nginx 의 conf.d 마운트 디렉터리에 복사
-   (인증서 경로를 실제 위치로 수정).
-2. nginx 컨테이너가 `shared-net` 에 붙어 있는지 확인 — 안 붙어 있으면:
-   `docker network connect shared-net nginx` (또는 docker-infra compose 에 추가).
-3. 반영: `docker exec nginx nginx -t && docker exec nginx nginx -s reload`
+nginx 와 fishtank-app 은 이미 `shared-net` 에 함께 있어 이름 해석이 된다(추가 연결 불필요).
+
+```bash
+cp ~/fish-tank/deploy/nginx-fishtank.conf \
+   ~/docker-infra/nginx/conf.d/site-fishtank.conf
+docker exec nginx nginx -t          # 문법 검증
+docker exec nginx nginx -s reload   # 무중단 반영
+```
+
+- 인증서 경로 수정 불필요(`_ssl-fllab.inc` 재사용).
+- 이 vhost 는 의도적으로 `security-headers.conf` 를 include 하지 않는다 —
+  그 파일의 `X-Frame-Options: DENY` 가 Teams 임베드를 막기 때문. 프레임 정책은
+  앱의 `frame-ancestors` CSP 가 담당한다(자세한 내용은 conf 파일 주석 참고).
 
 ## 5. 확인
 
