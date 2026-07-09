@@ -1,0 +1,55 @@
+# fish-tank 배포 구성 (10.10.33.36, 기존 docker-infra 의 nginx 뒤에 배치).
+#
+# - 앱은 내부 3000 포트 HTTP 로만 동작하고, 호스트 포트를 열지 않는다.
+#   외부 노출은 nginx(80/443 점유 중)가 shared-net 을 통해 프록시한다.
+# - PostgreSQL 은 fish-tank 전용으로 함께 띄우며 내부 네트워크에만 존재한다.
+# - 실행 위치: 서버의 ~/fish-tank/deploy (레포를 서버로 가져간 뒤).
+#   docker compose --env-file .env up -d --build
+services:
+  fishtank:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: fishtank-app
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgres://fishtank:${FISHTANK_DB_PASSWORD:?}@fishtank-db:5432/fishtank
+      TEAMS_APP_CLIENT_ID: ${TEAMS_APP_CLIENT_ID:?}
+      TEAMS_APP_ID_URI: api://fishtank.fllab.internal/${TEAMS_APP_CLIENT_ID:?}
+      TEAMS_TENANT_ID: ${TEAMS_TENANT_ID:?}
+    depends_on:
+      fishtank-db:
+        condition: service_healthy
+    networks:
+      - internal
+      - shared-net
+
+  fishtank-db:
+    image: postgres:16-alpine
+    container_name: fishtank-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fishtank
+      POSTGRES_USER: fishtank
+      POSTGRES_PASSWORD: ${FISHTANK_DB_PASSWORD:?}
+    volumes:
+      - fishtank-db-data:/var/lib/postgresql/data
+      # 최초 기동 시 스키마 자동 적용(빈 데이터 디렉터리일 때만 실행됨).
+      - ../server/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fishtank -d fishtank"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal
+
+volumes:
+  fishtank-db-data:
+
+networks:
+  internal: {}
+  # 기존 nginx 컨테이너와 통신하기 위한 프로젝트 간 공용 네트워크(이미 존재).
+  shared-net:
+    external: true

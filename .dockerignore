@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+client/dist
+teams/dist
+teams/fishtank-teams.zip
+.git
+.moai
+.claude
+docs
+*.md
+.env
+**/.env
