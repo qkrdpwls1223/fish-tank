@@ -1,0 +1,21 @@
+{
+  "name": "fish-tank",
+  "version": "0.1.0",
+  "private": true,
+  "description": "공유 어항 — Microsoft Teams 내장 탭 앱 (임직원이 손으로 그린 물고기가 실시간으로 헤엄치는 공용 어항)",
+  "type": "module",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "test:client": "npm run test --workspace client",
+    "test:server": "npm run test --workspace server",
+    "dev:client": "npm run dev --workspace client",
+    "dev:server": "npm run dev --workspace server"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
