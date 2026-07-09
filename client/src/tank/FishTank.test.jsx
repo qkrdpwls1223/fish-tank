@@ -34,12 +34,18 @@ function fakeConnect() {
   return { connect, captured, close };
 }
 
+// 물고기 목록 패널은 기본 닫힘이므로, 목록 내용(라벨/삭제/정보)을 검증하는 테스트는 먼저 연다.
+async function openList() {
+  await userEvent.click(await screen.findByRole("button", { name: /목록 열기/ }));
+}
+
 describe("FishTank", () => {
   it("진입 시 스냅샷을 로드해 모든 물고기를 렌더링한다 (REQ-RT-004)", async () => {
     const loadSnapshot = vi.fn().mockResolvedValue([fish("a"), fish("b")]);
     const { connect } = fakeConnect();
 
     render(<FishTank token="t" loadSnapshot={loadSnapshot} connect={connect} />);
+    await openList();
 
     expect(await screen.findByText("물고기-a")).toBeInTheDocument();
     expect(screen.getByText("물고기-b")).toBeInTheDocument();
@@ -57,6 +63,7 @@ describe("FishTank", () => {
     const loadSnapshot = vi.fn().mockResolvedValue([fish("a")]);
     const { connect, captured } = fakeConnect();
     render(<FishTank token="t" loadSnapshot={loadSnapshot} connect={connect} />);
+    await openList();
 
     await screen.findByText("물고기-a");
 
@@ -71,6 +78,7 @@ describe("FishTank", () => {
     const loadSnapshot = vi.fn().mockResolvedValue([fish("a"), fish("b")]);
     const { connect, captured } = fakeConnect();
     render(<FishTank token="t" loadSnapshot={loadSnapshot} connect={connect} />);
+    await openList();
 
     await screen.findByText("물고기-a");
 
@@ -91,6 +99,7 @@ describe("FishTank", () => {
       .mockResolvedValueOnce([fish("b"), fish("c")]);
     const { connect, captured } = fakeConnect();
     render(<FishTank token="t" loadSnapshot={loadSnapshot} connect={connect} />);
+    await openList();
 
     await screen.findByText("물고기-a");
 
@@ -110,6 +119,7 @@ describe("FishTank", () => {
       .mockResolvedValue([fish("x", { displayMode: "anonymous", displayName: null })]);
     const { connect } = fakeConnect();
     render(<FishTank token="t" loadSnapshot={loadSnapshot} connect={connect} />);
+    await openList();
 
     expect(await screen.findByText("익명")).toBeInTheDocument();
   });
@@ -131,6 +141,7 @@ describe("FishTank", () => {
       />,
     );
 
+    await openList();
     await screen.findByText("물고기-a");
     const buttons = screen.getAllByRole("button", { name: /삭제/ });
     expect(buttons).toHaveLength(1);
@@ -150,6 +161,7 @@ describe("FishTank", () => {
       />,
     );
 
+    await openList();
     await screen.findByText("물고기-b");
     expect(screen.queryByRole("button", { name: /삭제/ })).toBeNull();
   });
@@ -168,6 +180,7 @@ describe("FishTank", () => {
       />,
     );
 
+    await openList();
     await screen.findByText("익명");
     expect(screen.getByRole("button", { name: /삭제/ })).toBeInTheDocument();
   });
@@ -187,6 +200,7 @@ describe("FishTank", () => {
       />,
     );
 
+    await openList();
     await screen.findByText("물고기-a");
     const item = screen.getByText("물고기-a").closest("li");
     await userEvent.click(within(item).getByRole("button", { name: /삭제/ }));
@@ -209,6 +223,7 @@ describe("FishTank", () => {
       />,
     );
 
+    await openList();
     await screen.findByText("물고기-a");
     const item = screen.getByText("물고기-a").closest("li");
     await userEvent.click(within(item).getByRole("button", { name: /삭제/ }));
@@ -267,6 +282,7 @@ describe("FishTank", () => {
     const loadSnapshot = vi.fn().mockResolvedValue([fish("a")]);
     const { connect, captured } = fakeConnect();
     render(<FishTank token="t" loadSnapshot={loadSnapshot} connect={connect} />);
+    await openList();
 
     await screen.findByText("물고기-a");
     act(() => {
@@ -287,6 +303,7 @@ describe("FishTank", () => {
     ]);
     const { connect } = fakeConnect();
     render(<FishTank token="t" loadSnapshot={loadSnapshot} connect={connect} />);
+    await openList();
 
     await userEvent.click(await screen.findByRole("button", { name: "구피" }));
 
@@ -305,6 +322,7 @@ describe("FishTank", () => {
     ]);
     const { connect } = fakeConnect();
     render(<FishTank token="t" loadSnapshot={loadSnapshot} connect={connect} />);
+    await openList();
 
     await userEvent.click(await screen.findByRole("button", { name: "익명" }));
 

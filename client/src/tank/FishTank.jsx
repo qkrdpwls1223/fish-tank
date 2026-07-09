@@ -13,13 +13,20 @@ import { fetchFishSnapshot, deleteFish as deleteFishApi } from "../fish/fishApi.
 import { sendFeed as sendFeedApi } from "./feedApi.js";
 import { connectRealtime, defaultRealtimeUrl } from "./realtimeClient.js";
 import { colors } from "../theme/colors.js";
-import { TAIL_FOLD_FRACTION } from "../drawing/drawingModel.js";
+import { TAIL_FOLD_FRACTION, MOUTH_FRACTION } from "../drawing/drawingModel.js";
 
 // 물고기 렌더 크기(원본 그림 대비 축소). 어항에서 아담하게 보이도록.
 const SPRITE_SCALE = 0.4;
 // 꼬리 파닥임 최대 각도(라디안)와 속도(라디안/초).
 const TAIL_MAX_ANGLE = 0.5;
 const TAIL_SPEED = 7;
+
+// 입(머리) 꿀렁임: 그림 오른쪽(머리) 영역만 먹이 반응 시 벌렁거린다. 경계선 위치는
+// 물고기별 mouthFraction(사용자 지정) 또는 기본 MOUTH_FRACTION 을 쓰며, 스낫 끝에서 가장 크게 벌어진다.
+// 입이 최대로 벌어질 때의 상하 벌림 폭(그림 높이 대비 비율).
+const MOUTH_MAX_OPEN = 0.16;
+// 입을 여닫는 속도(라디안/초). 꼬리보다 빠르게 오물거린다.
+const CHOMP_SPEED = 14;
 
 // 창 크기 측정 전 초기 기본값(가변 어항). jsdom 등 ResizeObserver 미지원 시에도 유지된다.
 const DEFAULT_WIDTH = 800;
@@ -77,7 +84,7 @@ export default function FishTank({
   // @MX:NOTE: [AUTO] 먹이 안내 재낭독 카운터. 동일 문구를 반복해도 라이브 영역 콘텐츠가
   //   바뀌도록(key 재마운트) 하여 스크린리더가 매번 재낭독하게 한다(NFR-A11Y-001).
   const [feedAnnounceCount, setFeedAnnounceCount] = useState(0);
-  const [listOpen, setListOpen] = useState(true); // 물고기 목록 패널 토글(기본 열림)
+  const [listOpen, setListOpen] = useState(false); // 물고기 목록 패널 토글(기본 닫힘)
   const [dark, setDark] = useState(false); // 어항 배경 라이트/다크 선택
   const [size, setSize] = useState({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT });
 
@@ -323,27 +330,54 @@ export default function FishTank({
         {listOpen && (
           <div
             style={{
-              background: "rgba(255,255,255,0.92)",
+              background: "rgba(255,255,255,0.97)",
               color: colors.text,
-              borderRadius: 10,
-              padding: "10px 12px",
-              boxShadow: "0 6px 20px rgba(0,0,0,0.18)",
+              border: `1px solid ${colors.border}`,
+              borderRadius: 12,
+              padding: "12px 14px",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.22)",
               maxHeight: "50vh",
               overflowY: "auto",
               width: "100%",
+              fontSize: 14,
             }}
           >
-            <p role="status" aria-live="polite" style={{ margin: "0 0 8px" }}>
+            <p
+              role="status"
+              aria-live="polite"
+              style={{ margin: "0 0 10px", fontWeight: 600, color: colors.text }}
+            >
               현재 {state.fish.length}마리가 헤엄치고 있어요.
             </p>
             <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {state.fish.map((f) => (
                 <li
                   key={f.id}
-                  style={{ display: "flex", gap: 6, alignItems: "center", padding: "2px 0" }}
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                    padding: "6px 0",
+                    borderTop: `1px solid ${colors.border}`,
+                  }}
                 >
-                  {/* 라벨 버튼: 클릭 시 정보 조회(REQ-INT-002). 키보드 접근 가능. */}
-                  <button type="button" onClick={() => setSelectedId(f.id)}>
+                  {/* 라벨 버튼: 클릭 시 정보 조회(REQ-INT-002). 선택 시 강조. 키보드 접근 가능. */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(f.id)}
+                    style={{
+                      flex: 1,
+                      textAlign: "left",
+                      background:
+                        selectedId === f.id ? "rgba(29,78,216,0.10)" : "transparent",
+                      color: colors.text,
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "6px 8px",
+                      fontSize: 14,
+                      cursor: "pointer",
+                    }}
+                  >
                     {labelFor(f)}
                   </button>
                   {/* 삭제 버튼은 서버가 계산한 deletable(본인 소유)에만 노출(REQ-OWN-002/004). */}
@@ -352,7 +386,16 @@ export default function FishTank({
                       type="button"
                       aria-label="물고기 삭제"
                       onClick={() => handleDelete(f.id)}
-                      style={{ color: colors.danger }}
+                      style={{
+                        background: "rgba(185,28,28,0.10)",
+                        color: colors.danger,
+                        border: `1px solid ${colors.danger}`,
+                        borderRadius: 8,
+                        padding: "4px 10px",
+                        fontSize: 13,
+                        cursor: "pointer",
+                        flexShrink: 0,
+                      }}
                     >
                       삭제
                     </button>
@@ -363,9 +406,20 @@ export default function FishTank({
 
             {/* 물고기 정보 패널 (REQ-INT-002). 익명은 "익명"으로만, 소유자 신원은 절대 미노출. */}
             {selectedFish && (
-              <div role="status" aria-label="물고기 정보" style={{ marginTop: 8 }}>
-                <p style={{ margin: 0 }}>{selectedInfo.label}</p>
-                <p style={{ margin: 0 }}>등록 시각: {selectedInfo.createdAt}</p>
+              <div
+                role="status"
+                aria-label="물고기 정보"
+                style={{
+                  marginTop: 10,
+                  paddingTop: 10,
+                  borderTop: `1px solid ${colors.border}`,
+                  color: colors.text,
+                }}
+              >
+                <p style={{ margin: 0, fontWeight: 600 }}>{selectedInfo.label}</p>
+                <p style={{ margin: "2px 0 0", color: colors.muted, fontSize: 13 }}>
+                  등록 시각: {selectedInfo.createdAt}
+                </p>
               </div>
             )}
           </div>
@@ -479,6 +533,17 @@ function bendPoint(p, foldX, pivotY, wave) {
   };
 }
 
+// 입 벌림: 머리 영역(mouthX 오른쪽) 점을 중심선(pivotY) 기준으로 상하로 벌린다.
+// 오른쪽 끝(스낫)일수록 크게, 중심선 위/아래로 갈라 입이 열리는 모양을 만든다.
+// gapePx 는 이번 프레임의 최대 벌림 폭(px); 0 이면 원본을 그대로 돌려준다.
+function chompPoint(p, mouthX, pivotY, gapePx, w) {
+  if (gapePx <= 0 || p.x <= mouthX) return p;
+  const span = w - mouthX || 1;
+  const factor = Math.min(1, (p.x - mouthX) / span); // 경첩(0) → 스낫 끝(1)
+  const side = p.y === pivotY ? 0 : p.y > pivotY ? 1 : -1;
+  return { x: p.x, y: p.y + side * gapePx * factor };
+}
+
 // 물고기 위 이름표 텍스트: "{이름}의 물고기" / 익명은 "익명의 물고기"(REQ-OWN-004).
 function nameTagFor(sprite) {
   const name =
@@ -492,11 +557,18 @@ function drawFishSprite(ctx, sprite, now) {
   if (!drawing || !Array.isArray(drawing.strokes)) return;
   const w = drawing.width || 300;
   const h = drawing.height || 200;
-  const foldX = w * TAIL_FOLD_FRACTION;
+  // 사용자가 물고기 생성 시 지정한 가이드 위치를 쓴다. 구버전(필드 없음)은 기본값으로 폴백.
+  const foldX = w * (drawing.tailFraction ?? TAIL_FOLD_FRACTION);
+  const mouthX = w * (drawing.mouthFraction ?? MOUTH_FRACTION);
   const pivotY = h / 2;
   // 시간·위상 기반 꼬리 흔들림 각도.
   const t = (typeof now === "number" ? now : 0) / 1000;
   const wave = Math.sin(t * TAIL_SPEED + phaseFromId(sprite.id)) * TAIL_MAX_ANGLE;
+  // 입 벌림 폭(px): 먹이 반응 세기(sprite.eat)에 여닫는 오물거림을 곱한다.
+  // 0.5-0.5*cos 는 0..1 을 오가며 입을 완전히 다물었다 벌렸다 반복하게 한다.
+  const eat = sprite.eat || 0;
+  const chomp = 0.5 - 0.5 * Math.cos(t * CHOMP_SPEED + phaseFromId(sprite.id));
+  const gapePx = eat * chomp * (h * MOUTH_MAX_OPEN);
 
   ctx.save();
   ctx.translate(sprite.x, sprite.y);
@@ -509,10 +581,24 @@ function drawFishSprite(ctx, sprite, now) {
     ctx.lineWidth = stroke.width;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    const p0 = bendPoint(stroke.points[0], foldX, pivotY, wave);
+    // 꼬리는 왼쪽(foldX 이하)만, 입은 오른쪽(mouthX 이상)만 변형하므로 두 변형은
+    // 서로 다른 영역에 작용해 합성해도 겹치지 않는다.
+    const p0 = chompPoint(
+      bendPoint(stroke.points[0], foldX, pivotY, wave),
+      mouthX,
+      pivotY,
+      gapePx,
+      w,
+    );
     ctx.moveTo(p0.x, p0.y);
     for (let i = 1; i < stroke.points.length; i += 1) {
-      const p = bendPoint(stroke.points[i], foldX, pivotY, wave);
+      const p = chompPoint(
+        bendPoint(stroke.points[i], foldX, pivotY, wave),
+        mouthX,
+        pivotY,
+        gapePx,
+        w,
+      );
       ctx.lineTo(p.x, p.y);
     }
     ctx.stroke();

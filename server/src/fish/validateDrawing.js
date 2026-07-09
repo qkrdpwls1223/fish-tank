@@ -16,6 +16,9 @@ export const DRAWING_LIMITS = Object.freeze({
   maxStrokeWidth: 50,
 });
 
+// 가이드 선(꼬리/입) 위치 제약 — 클라이언트(drawingModel.js GUIDE_LIMITS)와 동일 규칙.
+export const GUIDE_LIMITS = Object.freeze({ min: 0.1, max: 0.9, minGap: 0.1 });
+
 // 안전한 색상: #rrggbb 헥스만 허용(스크립트/URL 주입 차단).
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
@@ -31,6 +34,23 @@ function isPositiveInt(v, max) {
 // 실패 결과 헬퍼.
 function fail(reason) {
   return { valid: false, reason };
+}
+
+// 가이드 선(꼬리/입) 위치 검증. 문제 없으면 null, 있으면 실패 사유를 돌려준다.
+// 하위호환: 두 필드가 모두 없으면 통과(구버전 그림). 하나만 있으면 형식 오류.
+function validateGuides(drawing, limits = GUIDE_LIMITS) {
+  const hasTail = drawing.tailFraction !== undefined;
+  const hasMouth = drawing.mouthFraction !== undefined;
+  if (!hasTail && !hasMouth) return null;
+  if (!hasTail || !hasMouth) return "invalid_format";
+  const inRange = (v) => isFiniteNumber(v) && v >= limits.min && v <= limits.max;
+  if (!inRange(drawing.tailFraction) || !inRange(drawing.mouthFraction)) {
+    return "invalid_format";
+  }
+  if (drawing.mouthFraction - drawing.tailFraction < limits.minGap) {
+    return "invalid_format";
+  }
+  return null;
 }
 
 /**
@@ -54,6 +74,10 @@ export function validateDrawing(drawing, limits = DRAWING_LIMITS) {
   }
   if (!Array.isArray(drawing.strokes)) return fail("invalid_format");
   if (drawing.strokes.length > limits.maxStrokes) return fail("invalid_format");
+
+  // 1b) 가이드 선(꼬리/입) 위치 검증(선택 필드, 하위호환).
+  const guideReason = validateGuides(drawing);
+  if (guideReason) return fail(guideReason);
 
   // 2) 스트로크/점 형식 검증 + 통계 수집.
   let totalPoints = 0;

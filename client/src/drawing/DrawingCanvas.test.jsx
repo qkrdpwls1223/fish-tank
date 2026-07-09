@@ -64,4 +64,40 @@ describe("DrawingCanvas", () => {
     const last = onChange.mock.calls.at(-1)[0];
     expect(last.strokes).toHaveLength(1);
   });
+
+  it("꼬리 위치 슬라이더로 tailFraction 을 조정한다(캔버스와 분리)", () => {
+    const onChange = vi.fn();
+    render(<DrawingCanvas width={300} height={200} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("꼬리 위치"), { target: { value: "20" } });
+
+    const last = onChange.mock.calls.at(-1)[0];
+    expect(last.tailFraction).toBeCloseTo(0.2);
+    expect(last.strokes).toHaveLength(0); // 슬라이더 조정은 그리기가 아니다
+  });
+
+  it("입 위치 슬라이더로 mouthFraction 을 조정한다", () => {
+    const onChange = vi.fn();
+    render(<DrawingCanvas width={300} height={200} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("입 위치"), { target: { value: "83" } });
+
+    const last = onChange.mock.calls.at(-1)[0];
+    expect(last.mouthFraction).toBeCloseTo(0.83);
+    expect(last.strokes).toHaveLength(0);
+  });
+
+  it("캔버스 포인터 입력은 이제 가이드와 무관하게 항상 그리기로만 동작한다", () => {
+    const onChange = vi.fn();
+    render(<DrawingCanvas width={300} height={200} onChange={onChange} />);
+    const canvas = screen.getByLabelText("물고기 그리기 캔버스");
+
+    // 예전 꼬리선 위치(x=120) 위에서 눌러도 드래그가 아니라 획이 그려져야 한다.
+    fireEvent.pointerDown(canvas, { clientX: 120, clientY: 100 });
+    fireEvent.pointerMove(canvas, { clientX: 160, clientY: 130 });
+    fireEvent.pointerUp(canvas, { clientX: 160, clientY: 130 });
+
+    const last = onChange.mock.calls.at(-1)[0];
+    expect(last.strokes).toHaveLength(1);
+  });
 });

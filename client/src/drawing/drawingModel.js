@@ -20,12 +20,31 @@ const DEFAULT_STROKE_WIDTH = 3;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 // 꼬리 파닥임 접힘선 위치(그림 너비 대비 비율). 이 선의 왼쪽이 꼬리로 간주되어
-// 어항에서 흔들린다. 그리기 캔버스의 점선 가이드와 렌더링이 같은 값을 공유한다.
+// 어항에서 흔들린다. 사용자가 지정하지 않은(구버전) 물고기의 기본값으로도 쓰인다.
 export const TAIL_FOLD_FRACTION = 0.4;
 
-// 초기 상태: 확정 스트로크 목록 + 진행 중 스트로크(current).
+// 입(머리) 경계선 기본 위치(그림 너비 대비 비율). 이 선의 오른쪽이 입으로 간주되어
+// 먹이를 먹을 때 꿀렁거린다. 그리기 캔버스 가이드와 어항 렌더링이 같은 값을 공유한다.
+export const MOUTH_FRACTION = 0.72;
+
+// 가이드 선(꼬리/입) 위치 제약: 그림 너비 대비 비율. 두 선은 min~max 안에 있어야 하고
+// 꼬리선은 입선보다 최소 minGap 만큼 왼쪽이어야 한다(영역이 겹치거나 뒤집히지 않게).
+export const GUIDE_LIMITS = Object.freeze({ min: 0.1, max: 0.9, minGap: 0.1 });
+
+function clampNum(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+// 초기 상태: 확정 스트로크 목록 + 진행 중 스트로크(current) + 가이드 위치(기본값).
 export function initialDrawingState(width = 300, height = 200) {
-  return { width, height, strokes: [], current: null };
+  return {
+    width,
+    height,
+    strokes: [],
+    current: null,
+    tailFraction: TAIL_FOLD_FRACTION,
+    mouthFraction: MOUTH_FRACTION,
+  };
 }
 
 // 지우개: (x,y) 반경 안의 점을 획에서 제거하고, 끊긴 획은 조각으로 분할한다.
@@ -89,6 +108,22 @@ export function drawingReducer(state, action) {
       return { ...state, strokes: state.strokes.slice(0, -1) };
     case "CLEAR":
       return { ...state, strokes: [], current: null };
+    case "SET_TAIL_FRACTION": {
+      // 꼬리선은 입선보다 minGap 이상 왼쪽이어야 한다.
+      const { min, minGap } = GUIDE_LIMITS;
+      return {
+        ...state,
+        tailFraction: clampNum(action.fraction, min, state.mouthFraction - minGap),
+      };
+    }
+    case "SET_MOUTH_FRACTION": {
+      // 입선은 꼬리선보다 minGap 이상 오른쪽이어야 한다.
+      const { max, minGap } = GUIDE_LIMITS;
+      return {
+        ...state,
+        mouthFraction: clampNum(action.fraction, state.tailFraction + minGap, max),
+      };
+    }
     case "ERASE_AT": {
       const strokes = eraseFromStrokes(state.strokes, action.x, action.y, action.radius ?? 12);
       return { ...state, strokes };
@@ -104,6 +139,8 @@ export function toDrawing(state) {
     version: 1,
     width: state.width,
     height: state.height,
+    tailFraction: state.tailFraction ?? TAIL_FOLD_FRACTION,
+    mouthFraction: state.mouthFraction ?? MOUTH_FRACTION,
     strokes: state.strokes.map((s) => ({
       color: s.color,
       width: s.width,
@@ -122,6 +159,23 @@ function fail(reason) {
   return { valid: false, reason };
 }
 
+// 가이드 선(꼬리/입) 위치 검증. 문제가 없으면 null, 있으면 실패 사유 문자열을 돌려준다.
+// 하위호환: 두 필드가 모두 없으면 통과(구버전 그림). 하나만 있으면 형식 오류로 본다.
+function validateGuides(drawing, limits = GUIDE_LIMITS) {
+  const hasTail = drawing.tailFraction !== undefined;
+  const hasMouth = drawing.mouthFraction !== undefined;
+  if (!hasTail && !hasMouth) return null;
+  if (!hasTail || !hasMouth) return "invalid_format";
+  const inRange = (v) => isFiniteNumber(v) && v >= limits.min && v <= limits.max;
+  if (!inRange(drawing.tailFraction) || !inRange(drawing.mouthFraction)) {
+    return "invalid_format";
+  }
+  if (drawing.mouthFraction - drawing.tailFraction < limits.minGap) {
+    return "invalid_format";
+  }
+  return null;
+}
+
 /**
  * 그림 데이터 사전 검증(서버와 동일 규칙).
  * @returns {{valid:boolean, reason:string|null}}
@@ -135,6 +189,11 @@ export function validateDrawing(drawing, limits = DRAWING_LIMITS) {
   if (!isPositiveInt(drawing.height, limits.maxCanvas)) return fail("invalid_format");
   if (!Array.isArray(drawing.strokes)) return fail("invalid_format");
   if (drawing.strokes.length > limits.maxStrokes) return fail("invalid_format");
+
+  // 가이드 선(꼬리/입) 위치는 선택 필드. 하나라도 있으면 둘 다 있어야 하고,
+  // 비율 범위(min~max)와 순서(꼬리 + minGap <= 입)를 만족해야 한다(구버전은 필드 없음 → 통과).
+  const guideReason = validateGuides(drawing);
+  if (guideReason) return fail(guideReason);
 
   let totalPoints = 0;
   let minX = Infinity;

@@ -217,3 +217,42 @@ describe("validateDrawing — 크기 상한 (NFR-SEC-003)", () => {
     );
   });
 });
+
+describe("validateDrawing — 가이드 선(꼬리/입) 위치 (사용자 지정)", () => {
+  it("가이드 필드가 없는 구버전 그림도 통과시킨다(하위호환)", () => {
+    expect(validateDrawing(validDrawing()).valid).toBe(true);
+  });
+
+  it("유효한 꼬리/입 위치를 통과시킨다", () => {
+    expect(
+      validateDrawing(validDrawing({ tailFraction: 0.3, mouthFraction: 0.7 })).valid,
+    ).toBe(true);
+  });
+
+  it("가이드 필드가 하나만 있으면 invalid_format 으로 거부한다", () => {
+    expect(validateDrawing(validDrawing({ tailFraction: 0.3 })).reason).toBe(
+      "invalid_format",
+    );
+    expect(validateDrawing(validDrawing({ mouthFraction: 0.7 })).reason).toBe(
+      "invalid_format",
+    );
+  });
+
+  it("뒤집히거나 너무 붙은 가이드를 invalid_format 으로 거부한다", () => {
+    expect(
+      validateDrawing(validDrawing({ tailFraction: 0.7, mouthFraction: 0.3 })).reason,
+    ).toBe("invalid_format");
+    expect(
+      validateDrawing(validDrawing({ tailFraction: 0.5, mouthFraction: 0.55 })).reason,
+    ).toBe("invalid_format");
+  });
+
+  it("범위를 벗어난 가이드나 숫자가 아닌 값을 invalid_format 으로 거부한다", () => {
+    expect(
+      validateDrawing(validDrawing({ tailFraction: 0.02, mouthFraction: 0.7 })).reason,
+    ).toBe("invalid_format");
+    expect(
+      validateDrawing(validDrawing({ tailFraction: 0.3, mouthFraction: "0.7" })).reason,
+    ).toBe("invalid_format");
+  });
+});

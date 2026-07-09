@@ -16,6 +16,10 @@ const STEER_RATE = 4.5;
 // 물고기 중심이 먹이에 이 거리(px) 안으로 들어오면 먹은 것으로 판정한다.
 export const EAT_RADIUS = 26;
 
+// 이 거리(px) 안으로 먹이에 다가오면 입을 벌리기 시작한다. EAT_RADIUS 에 가까워질수록
+// 크게 벌린다(먹기 직전 최대). 렌더러(FishTank)가 sprite.eat 값으로 입 꿀렁임을 그린다.
+export const CHEW_RADIUS = 70;
+
 // 알갱이 침강 속도 범위(px/s)와 살포 시 흩어지는 폭(px).
 const SINK_MIN = 16;
 const SINK_RANGE = 16;
@@ -103,6 +107,14 @@ export function stepFoods(foods, dtMs, bounds) {
   return foods.map((f) => stepFood(f, dtMs, bounds)).filter(isFoodAlive);
 }
 
+// 먹이까지의 거리(px)를 입 벌림 세기 0..1 로 환산한다. CHEW_RADIUS 밖은 0(다뭄),
+// EAT_RADIUS 안쪽은 1(최대)로, 그 사이는 선형으로 커진다.
+function eatIntensity(dist) {
+  if (dist >= CHEW_RADIUS) return 0;
+  if (dist <= EAT_RADIUS) return 1;
+  return (CHEW_RADIUS - dist) / (CHEW_RADIUS - EAT_RADIUS);
+}
+
 // 스프라이트에서 가장 가까운 살아있는 먹이를 찾는다(없으면 null).
 function nearestFood(sprite, foods) {
   let best = null;
@@ -133,7 +145,8 @@ function nearestFood(sprite, foods) {
  */
 export function reactToFood(sprite, foods, dtMs = 16) {
   const food = nearestFood(sprite, foods);
-  if (!food) return sprite;
+  // 먹이가 없으면 속도는 그대로 두고 입만 다물게 한다(먹던 물고기의 입 닫힘).
+  if (!food) return sprite.eat ? { ...sprite, eat: 0 } : sprite;
 
   // 물고기별 고유 자리: 알갱이 주변 원 위의 결정적 오프셋(EAT_RADIUS 이내).
   const angle = (hashId(sprite.id) % 360) * (Math.PI / 180);
@@ -151,13 +164,21 @@ export function reactToFood(sprite, foods, dtMs = 16) {
   const t = Math.min(1, STEER_RATE * (dtMs / 1000));
   const vx = sprite.vx + (ux * chase - sprite.vx) * t;
   const vy = sprite.vy + (uy * chase - sprite.vy) * t;
+  // 입 벌림 세기는 조준점이 아니라 먹이 알갱이 중심까지의 실제 거리로 정한다.
+  const eat = eatIntensity(Math.hypot(food.x - sprite.x, food.y - sprite.y));
   // 반응 중에는 (속도 부호가 아직 못 뒤집혀도) 먹이 쪽을 바라보게 한다.
-  return { ...sprite, vx, vy, facing: ux >= 0 ? 1 : -1 };
+  return { ...sprite, vx, vy, facing: ux >= 0 ? 1 : -1, eat };
 }
 
 // 모든 스프라이트에 먹이 반응을 적용한다(불변 갱신).
 export function reactToFoods(sprites, foods, dtMs = 16) {
-  if (foods.length === 0) return sprites;
+  if (foods.length === 0) {
+    // 먹이가 없을 땐 먹던 물고기의 입만 다물게 하고(eat 리셋), 나머지는 원본을 유지해
+    // 매 프레임 불필요한 객체 생성을 피한다(대부분의 시간은 먹이가 없는 상태다).
+    return sprites.some((s) => s.eat)
+      ? sprites.map((s) => (s.eat ? { ...s, eat: 0 } : s))
+      : sprites;
+  }
   return sprites.map((s) => reactToFood(s, foods, dtMs));
 }
 
