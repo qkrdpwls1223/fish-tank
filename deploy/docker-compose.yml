@@ -16,7 +16,9 @@ services:
       PORT: "3000"
       DATABASE_URL: postgres://fishtank:${FISHTANK_DB_PASSWORD:?}@fishtank-db:5432/fishtank
       TEAMS_APP_CLIENT_ID: ${TEAMS_APP_CLIENT_ID:?}
-      TEAMS_APP_ID_URI: api://fishtank.fllab.internal/${TEAMS_APP_CLIENT_ID:?}
+      # TEAMS_APP_ID_URI 는 설정하지 않는다 — fllab.internal 이 Azure 인증 도메인이
+      # 아니라 기본 Application ID URI(api://<clientId>)를 쓰기 때문. 서버는 clientId 와
+      # api://<clientId> 두 형태의 aud 를 모두 허용한다(buildAuthParams).
       TEAMS_TENANT_ID: ${TEAMS_TENANT_ID:?}
     depends_on:
       fishtank-db:

@@ -35,6 +35,6 @@
   "validDomains": ["fishtank.fllab.internal"],
   "webApplicationInfo": {
     "id": "__TEAMS_APP_CLIENT_ID__",
-    "resource": "api://fishtank.fllab.internal/__TEAMS_APP_CLIENT_ID__"
+    "resource": "api://__TEAMS_APP_CLIENT_ID__"
   }
 }

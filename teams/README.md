@@ -17,8 +17,10 @@ hosts 방식으로 동작한다(모바일 Teams 는 hosts 를 넣을 수 없어 
 
 1. Azure Portal → 앱 등록 → 새 등록 → **애플리케이션(클라이언트) ID** 확보
 2. **API 노출(Expose an API)**:
-   - Application ID URI: `api://fishtank.fllab.internal/<클라이언트ID>`
-   - 스코프 추가: `access_as_user`
+   - Application ID URI: 기본값 `api://<클라이언트ID>` 그대로 사용
+     (fllab.internal 은 Azure 인증 도메인이 아니라 커스텀 URI 설정 불가)
+   - 스코프 추가: `access_as_user` (표시 이름/설명에만 브랜딩)
+   - 권한 있는 클라이언트 앱 2개 등록(Teams 데스크톱/웹, 아래 3절 참고)
 3. **권한 있는 클라이언트 애플리케이션** 2개 추가:
    - `1fec8e78-bce4-4aaf-ab1b-5451cc387264` (Teams 데스크톱/모바일)
    - `5e3ce6c0-2b1f-4285-8d4b-75ee78787346` (Teams 웹)
@@ -30,7 +32,7 @@ hosts 방식으로 동작한다(모바일 Teams 는 hosts 를 넣을 수 없어 
 DATABASE_URL=postgres://...
 PORT=443
 TEAMS_APP_CLIENT_ID=<1의 클라이언트 ID>
-TEAMS_APP_ID_URI=api://fishtank.fllab.internal/<클라이언트 ID>
+# TEAMS_APP_ID_URI 는 생략 가능 — 서버가 clientId 와 api://<clientId> 둘 다 허용.
 TEAMS_TENANT_ID=<테넌트 ID>
 TLS_CERT_PATH=<인증서 pem 경로>
 TLS_KEY_PATH=<개인키 pem 경로>
@@ -71,5 +73,5 @@ node teams/build.mjs
 |---|---|
 | 탭이 빈 화면 | 인증서가 PC 에서 신뢰되는지(브라우저로 직접 접속해 자물쇠 확인) |
 | 로그인 실패 반복 | webApplicationInfo.resource ↔ Azure Application ID URI 일치 여부 |
-| 401 응답 | server/.env 의 TEAMS_APP_ID_URI / TENANT_ID 값과 토큰 aud/iss 비교 |
+| 401 응답 | 매니페스트 resource(api://<clientId>) ↔ Azure Application ID URI ↔ TENANT_ID 일치 확인 |
 | WS 재연결 반복 | 프록시 없이 서버 직결인지, 443 방화벽 개방 여부 |

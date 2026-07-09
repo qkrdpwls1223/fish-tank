@@ -11,19 +11,31 @@ describe("buildAuthParams", () => {
     expect(params.issuer).toBe(
       "https://login.microsoftonline.com/tenant-abc/v2.0"
     );
-    expect(params.audience).toBe("client-xyz");
+    // audience 는 clientId 와 api://<clientId> 두 형태를 모두 허용한다.
+    expect(params.audience).toEqual(["client-xyz", "api://client-xyz"]);
     expect(params.jwksUri).toBe(
       "https://login.microsoftonline.com/tenant-abc/discovery/v2.0/keys"
     );
   });
 
-  it("TEAMS_APP_ID_URI 가 있으면 audience 로 우선 사용한다", () => {
+  it("TEAMS_APP_ID_URI 가 있으면 허용 audience 목록에 추가한다", () => {
+    const params = buildAuthParams({
+      TEAMS_TENANT_ID: "tenant-abc",
+      TEAMS_APP_CLIENT_ID: "client-xyz",
+      TEAMS_APP_ID_URI: "api://fishtank.fllab.internal/client-xyz",
+    });
+    expect(params.audience).toContain("api://fishtank.fllab.internal/client-xyz");
+    expect(params.audience).toContain("client-xyz");
+    expect(params.audience).toContain("api://client-xyz");
+  });
+
+  it("기본 audience 와 중복되는 TEAMS_APP_ID_URI 는 중복 추가하지 않는다", () => {
     const params = buildAuthParams({
       TEAMS_TENANT_ID: "tenant-abc",
       TEAMS_APP_CLIENT_ID: "client-xyz",
       TEAMS_APP_ID_URI: "api://client-xyz",
     });
-    expect(params.audience).toBe("api://client-xyz");
+    expect(params.audience).toEqual(["client-xyz", "api://client-xyz"]);
   });
 
   it("TEAMS_JWKS_URI 가 있으면 그 값을 우선 사용한다", () => {

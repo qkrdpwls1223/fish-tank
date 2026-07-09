@@ -53,6 +53,14 @@ export default function App({ authenticate = defaultAuthenticate, tankProps = {}
       setToken(identity?.token ?? null);
       dispatch({ type: "AUTH_SUCCESS", identity });
     } catch (error) {
+      // 임시 진단: 로그인 실패의 실제 원인(코드/메시지/Teams SDK cause)을 콘솔에 노출.
+      // 원인 파악 후 제거 예정.
+      console.error(
+        "[fish-tank auth 실패]",
+        "code=", error?.code,
+        "message=", error?.message,
+        "cause=", error?.cause,
+      );
       dispatch({ type: "AUTH_FAILURE", error });
     }
   }, [authenticate]);
