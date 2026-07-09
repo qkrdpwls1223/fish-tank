@@ -3,9 +3,11 @@ import { initialTankState, tankReducer } from "./tankReducer.js";
 import {
   spawnSprite,
   stepSprites,
+  applySeparation,
+  applySchooling,
   selectAnimated,
 } from "./tankModel.js";
-import { dropFood, stepFoods, reactToFoods } from "./feedingModel.js";
+import { scatterFood, stepFoods, reactToFoods, consumeFoods } from "./feedingModel.js";
 import { fishInfo } from "./fishInfo.js";
 import { fetchFishSnapshot, deleteFish as deleteFishApi } from "../fish/fishApi.js";
 import { sendFeed as sendFeedApi } from "./feedApi.js";
@@ -123,10 +125,11 @@ export default function FishTank({
     dispatch({ type: "SNAPSHOT", fish });
   }, [loadSnapshot, token]);
 
-  // 어항에 임시 먹이를 떨어뜨린다(REQ-INT-001). 애니메이션 루프가 소비한다.
+  // 어항에 임시 먹이를 살포한다(REQ-INT-001). 좌표 1개를 살포 중심점으로 삼아
+  // 알갱이 여러 개를 흩뿌린다(실시간 공유도 중심 좌표만 전파, 서버 계약 불변).
   const addFoodLocal = useCallback((x, y) => {
-    foodsRef.current = [...foodsRef.current, dropFood({ x, y }, Date.now())];
-    setFeedMessage("물고기에게 먹이를 주었어요.");
+    foodsRef.current = [...foodsRef.current, ...scatterFood({ x, y }, Date.now())];
+    setFeedMessage("먹이를 뿌렸어요. 물고기들이 먹으러 모여들어요!");
     // 동일 문구여도 카운터를 올려 라이브 영역이 재낭독되게 한다(NFR-A11Y-001).
     setFeedAnnounceCount((n) => n + 1);
   }, []);
@@ -177,9 +180,10 @@ export default function FishTank({
   // 먹이 주기 (REQ-INT-001). 로컬에 즉시 반영하고, 실시간 공유(REQ-INT-003)로도 전파한다.
   // 좌표만 서버로 보내며 신원은 서버가 토큰으로만 판별한다(NFR-SEC-001, REQ-OWN-004).
   const handleFeed = useCallback(() => {
-    const { width, height } = boundsRef.current;
-    const x = width / 2;
-    const y = height / 2;
+    const { width } = boundsRef.current;
+    // 수면 근처의 무작위 지점에서 살포한다(매번 같은 자리가 아니게).
+    const x = width * (0.2 + Math.random() * 0.6);
+    const y = 30;
     addFoodLocal(x, y);
     onFeed({ token, x, y }).catch(() => {
       /* 공유 실패해도 로컬 먹이 효과는 유지한다(어항 상태 불변) */
@@ -213,12 +217,15 @@ export default function FishTank({
       last = now;
       const bounds = boundsRef.current; // 창 크기 변화에 맞춰 매 프레임 현재 범위를 읽는다.
       const map = spritesRef.current;
-      // 먹이가 있으면 물고기가 먹이 쪽으로 반응한 뒤 전진한다(REQ-INT-001).
-      foodsRef.current = stepFoods(foodsRef.current, dt);
-      const reacting = reactToFoods([...map.values()], foodsRef.current);
-      const stepped = stepSprites(reacting, dt, bounds);
+      // 먹이는 가라앉고, 물고기는 먹이 쪽으로 헤엄쳐 가서 닿으면 먹는다(REQ-INT-001).
+      // 무리 성향 물고기는 떼 지어 다니고, 분리 조향으로 서로 겹치지 않는다.
+      foodsRef.current = stepFoods(foodsRef.current, dt, bounds);
+      const reacting = reactToFoods([...map.values()], foodsRef.current, dt);
+      const flocked = applySeparation(applySchooling(reacting, dt), dt);
+      const stepped = stepSprites(flocked, dt, bounds);
+      foodsRef.current = consumeFoods(stepped, foodsRef.current);
       for (const s of stepped) map.set(s.id, s);
-      drawTank(canvasRef.current, selectAnimated(stepped), bounds, now);
+      drawTank(canvasRef.current, selectAnimated(stepped), bounds, now, foodsRef.current);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -422,8 +429,8 @@ export default function FishTank({
   );
 }
 
-// 캔버스에 스프라이트를 그린다. 2D 컨텍스트 미지원(jsdom) 환경에서는 무시한다.
-function drawTank(canvas, sprites, bounds, now) {
+// 캔버스에 먹이와 스프라이트를 그린다. 2D 컨텍스트 미지원(jsdom) 환경에서는 무시한다.
+function drawTank(canvas, sprites, bounds, now, foods = []) {
   if (!canvas) return;
   let ctx = null;
   try {
@@ -434,9 +441,20 @@ function drawTank(canvas, sprites, bounds, now) {
   if (!ctx) return;
 
   ctx.clearRect(0, 0, bounds.width, bounds.height);
+  for (const food of foods) {
+    drawFoodPellet(ctx, food);
+  }
   for (const sprite of sprites) {
     drawFishSprite(ctx, sprite, now);
   }
+}
+
+// 먹이 알갱이를 그린다(물고기 뒤 레이어). 작은 단색 점 하나로 단순하게.
+function drawFoodPellet(ctx, food) {
+  ctx.beginPath();
+  ctx.arc(food.x, food.y, 3, 0, Math.PI * 2);
+  ctx.fillStyle = "#c98a3b";
+  ctx.fill();
 }
 
 // 물고기마다 다른 파닥임 위상을 id 에서 결정적으로 뽑는다(서로 엇박자로 흔들리게).
@@ -459,6 +477,13 @@ function bendPoint(p, foldX, pivotY, wave) {
     x: foldX + dx * cos - dy * sin,
     y: pivotY + dx * sin + dy * cos,
   };
+}
+
+// 물고기 위 이름표 텍스트: "{이름}의 물고기" / 익명은 "익명의 물고기"(REQ-OWN-004).
+function nameTagFor(sprite) {
+  const name =
+    sprite.displayMode === "named" && sprite.displayName ? sprite.displayName : "익명";
+  return `${name}의 물고기`;
 }
 
 // 손그림 스트로크를 스프라이트 위치에 방향(facing)·축소·꼬리 파닥임을 적용해 그린다(REQ-DRAW-003).
@@ -492,5 +517,19 @@ function drawFishSprite(ctx, sprite, now) {
     }
     ctx.stroke();
   }
+  ctx.restore();
+
+  // 이름표: 반전(facing) 변환 밖에서 그려 글자가 뒤집히지 않게 한다.
+  const tagY = sprite.y - (h * SPRITE_SCALE) / 2 - 8;
+  ctx.save();
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(0,0,0,0.55)"; // 밝은 배경에서도 읽히는 외곽선
+  ctx.fillStyle = "#ffffff";
+  const tag = nameTagFor(sprite);
+  ctx.strokeText(tag, sprite.x, tagY);
+  ctx.fillText(tag, sprite.x, tagY);
   ctx.restore();
 }
