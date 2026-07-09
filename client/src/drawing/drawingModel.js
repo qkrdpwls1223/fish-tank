@@ -28,9 +28,34 @@ export function initialDrawingState(width = 300, height = 200) {
   return { width, height, strokes: [], current: null };
 }
 
+// 지우개: (x,y) 반경 안의 점을 획에서 제거하고, 끊긴 획은 조각으로 분할한다.
+// 흰색 덧칠이 아니라 실제 삭제이므로 어항(투명 배경) 위에서도 깨끗하다.
+function eraseFromStrokes(strokes, x, y, radius) {
+  const result = [];
+  for (const stroke of strokes) {
+    const hitR = radius + stroke.width / 2;
+    const r2 = hitR * hitR;
+    let segment = [];
+    const flush = () => {
+      // 1개짜리 조각은 선으로 보이지 않으므로 버린다.
+      if (segment.length >= 2) result.push({ ...stroke, points: segment });
+      segment = [];
+    };
+    for (const p of stroke.points) {
+      const dx = p.x - x;
+      const dy = p.y - y;
+      if (dx * dx + dy * dy <= r2) flush();
+      else segment.push(p);
+    }
+    flush();
+  }
+  return result;
+}
+
 /**
  * 드로잉 상태 리듀서.
- * 액션: BEGIN_STROKE(x,y,color?,width?), ADD_POINT(x,y), END_STROKE, UNDO, CLEAR
+ * 액션: BEGIN_STROKE(x,y,color?,width?), ADD_POINT(x,y), END_STROKE, UNDO, CLEAR,
+ *       ERASE_AT(x,y,radius)
  */
 export function drawingReducer(state, action) {
   switch (action.type) {
@@ -64,6 +89,10 @@ export function drawingReducer(state, action) {
       return { ...state, strokes: state.strokes.slice(0, -1) };
     case "CLEAR":
       return { ...state, strokes: [], current: null };
+    case "ERASE_AT": {
+      const strokes = eraseFromStrokes(state.strokes, action.x, action.y, action.radius ?? 12);
+      return { ...state, strokes };
+    }
     default:
       return state;
   }

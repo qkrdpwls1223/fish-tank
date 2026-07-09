@@ -184,11 +184,11 @@ export default function App({ authenticate = defaultAuthenticate, tankProps = {}
             onClick={(e) => e.stopPropagation()}
             style={{
               background: "#fff",
-              borderRadius: 14,
-              padding: 20,
+              borderRadius: 22,
+              padding: 24,
               maxWidth: 560,
               width: "100%",
-              maxHeight: "90vh",
+              maxHeight: "92vh",
               overflowY: "auto",
               position: "relative",
               boxShadow: "0 12px 40px rgba(0,0,0,0.3)",
@@ -200,18 +200,26 @@ export default function App({ authenticate = defaultAuthenticate, tankProps = {}
               onClick={() => setComposing(false)}
               style={{
                 position: "absolute",
-                top: 10,
-                right: 12,
+                top: 18,
+                right: 18,
+                width: 36,
+                height: 36,
                 border: "none",
-                background: "transparent",
-                fontSize: 20,
+                borderRadius: "50%",
+                background: "#f1f4f6",
+                color: "#5b6672",
+                fontSize: 16,
                 cursor: "pointer",
                 lineHeight: 1,
               }}
             >
               ✕
             </button>
-            <FishComposer authState={state} token={token} />
+            <FishComposer
+              authState={state}
+              token={token}
+              onSuccess={() => setComposing(false)}
+            />
           </div>
         </div>
       )}

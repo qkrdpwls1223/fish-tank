@@ -52,6 +52,50 @@ describe("drawingReducer — 스트로크 캡처", () => {
   });
 });
 
+describe("drawingReducer — ERASE_AT (지우개)", () => {
+  // (0,0)→(100,0) 직선 스트로크를 확정한 상태를 만든다.
+  function stateWithLine() {
+    let s = initialDrawingState(300, 200);
+    s = drawingReducer(s, { type: "BEGIN_STROKE", x: 0, y: 0, width: 3 });
+    for (const x of [25, 50, 75, 100]) {
+      s = drawingReducer(s, { type: "ADD_POINT", x, y: 0 });
+    }
+    return drawingReducer(s, { type: "END_STROKE" });
+  }
+
+  it("반경 안의 점을 제거하고 획을 두 조각으로 분할한다", () => {
+    const s = drawingReducer(stateWithLine(), {
+      type: "ERASE_AT",
+      x: 50,
+      y: 0,
+      radius: 10,
+    });
+    // 가운데(50,0)만 지워져 [0,25] / [75,100] 두 조각이 된다.
+    expect(s.strokes).toHaveLength(2);
+    expect(s.strokes[0].points.map((p) => p.x)).toEqual([0, 25]);
+    expect(s.strokes[1].points.map((p) => p.x)).toEqual([75, 100]);
+  });
+
+  it("남는 점이 1개뿐인 조각은 버린다", () => {
+    const s = drawingReducer(stateWithLine(), {
+      type: "ERASE_AT",
+      x: 30, // 25, 50 근방까지 넓게 지운다
+      y: 0,
+      radius: 24,
+    });
+    for (const stroke of s.strokes) {
+      expect(stroke.points.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("반경 밖이면 아무것도 지우지 않는다", () => {
+    const before = stateWithLine();
+    const s = drawingReducer(before, { type: "ERASE_AT", x: 50, y: 150, radius: 10 });
+    expect(s.strokes).toHaveLength(1);
+    expect(s.strokes[0].points).toHaveLength(5);
+  });
+});
+
 describe("drawingReducer — undo / clear (REQ-DRAW-005)", () => {
   it("UNDO 는 마지막 확정 스트로크를 제거한다", () => {
     let s = initialDrawingState(300, 200);
