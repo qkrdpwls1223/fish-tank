@@ -1,33 +1,34 @@
 # 배포 가이드 — 10.10.33.36 (CTRDMZDEV, Docker)
 
 기존 구성: docker-infra 프로젝트의 **nginx 가 80/443 점유**(TLS 종단),
-**dnsmasq 가 사내 DNS(53)** 운영, 프로젝트 간 통신은 **shared-net** 사용.
+프로젝트 간 통신은 **shared-net** 사용.
 fish-tank 는 nginx 뒤(내부 HTTP 3000)에 배치하고 전용 PostgreSQL 을 함께 띄운다.
 
 ```
-[사용자 PC] --DNS(dnsmasq)--> 10.10.33.36
+[사용자 PC] --공인 DNS--> 10.10.33.36
    Teams 탭 --HTTPS--> [nginx:443] --shared-net--> [fishtank-app:3000] --internal--> [fishtank-db:5432]
 ```
 
-## 1. 이름 해석 — 각 PC hosts 등록
+## 1. 이름 해석 — 공인 DNS 등록
 
-서버의 dnsmasq 는 현재 제대로 동작하지 않으므로, 기존 운영 방식대로
-**각 사용자 PC 의 hosts 파일**에 등록한다:
+`fishtank.formationlabs.co.kr` 은 회사 공인 도메인이므로, 사내 DNS 담당자에게
+아래 A 레코드 등록을 요청한다(각 PC hosts 파일 수동 등록 불필요):
 
 ```
-10.10.33.36  fishtank.fllab.internal
+fishtank.formationlabs.co.kr.  A  10.10.33.36
 ```
 
-(Windows: C:\Windows\System32\drivers\etc\hosts — 관리자 권한 필요.
-추후 dnsmasq 를 복구하면 `address=/fishtank.fllab.internal/10.10.33.36`
-한 줄로 hosts 배포를 대체할 수 있다.)
+(참고: 과거 `fishtank.fllab.internal` 사내 전용 도메인을 쓸 때는 hosts 파일
+수동 등록이 필요했다. 그때 배포한 `add-hosts.bat`/`remove-hosts.bat` 는 현재
+배포에서는 사용하지 않는다 — 자세한 내용은 `USER-SETUP.md` 참고.)
 
-## 2. 인증서 — 별도 작업 불필요
+## 2. 인증서 — 별도 발급 필요
 
-기존 nginx 에 와일드카드 인증서 `fllab.internal.crt/key`(`_ssl-fllab.inc`)가 이미
-있어 `fishtank.fllab.internal` 을 그대로 커버한다. 새 인증서 발급 불필요.
-(루트 CA 는 이미 각 PC 신뢰 저장소에 배포돼 있는 것으로 가정 — 기존 *.fllab.internal
-서비스들이 동작 중이므로.)
+`formationlabs.co.kr` 은 기존 `*.fllab.internal` 와일드카드 인증서로 커버되지
+않으므로, `fishtank.formationlabs.co.kr` 전용 인증서를 별도로 준비해야 한다
+(사내 CA 발급 또는 Let's Encrypt 등). 발급받은 인증서는
+`deploy/nginx-fishtank.conf` 의 `ssl_certificate`/`ssl_certificate_key` 경로에
+맞춰 배치한다(현재 파일은 placeholder 경로로 되어 있으니 실제 경로로 교체).
 
 ## 3. 소스 반입 및 기동
 
@@ -55,7 +56,7 @@ docker exec nginx nginx -t          # 문법 검증
 docker exec nginx nginx -s reload   # 무중단 반영
 ```
 
-- 인증서 경로 수정 불필요(`_ssl-fllab.inc` 재사용).
+- 인증서 경로는 2단계에서 준비한 실제 경로로 `nginx-fishtank.conf` 를 수정한 뒤 복사한다.
 - 이 vhost 는 의도적으로 `security-headers.conf` 를 include 하지 않는다 —
   그 파일의 `X-Frame-Options: DENY` 가 Teams 임베드를 막기 때문. 프레임 정책은
   앱의 `frame-ancestors` CSP 가 담당한다(자세한 내용은 conf 파일 주석 참고).
@@ -63,10 +64,10 @@ docker exec nginx nginx -s reload   # 무중단 반영
 ## 5. 확인
 
 ```bash
-curl -k https://fishtank.fllab.internal/healthz   # {"status":"ok"}
+curl https://fishtank.formationlabs.co.kr/healthz   # {"status":"ok"}
 ```
 
-브라우저에서 https://fishtank.fllab.internal 접속 → 인증서 신뢰 확인(자물쇠)
+브라우저에서 https://fishtank.formationlabs.co.kr 접속 → 인증서 신뢰 확인(자물쇠)
 → Teams 패키지 업로드는 teams/README.md 참고.
 
 ## 업데이트 배포

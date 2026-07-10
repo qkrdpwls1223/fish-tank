@@ -5,9 +5,9 @@
   "id": "7f3c9a52-6e0d-4b1a-9c2e-51d8aa04f7b3",
   "developer": {
     "name": "FLLab",
-    "websiteUrl": "https://fishtank.fllab.internal/",
-    "privacyUrl": "https://fishtank.fllab.internal/",
-    "termsOfUseUrl": "https://fishtank.fllab.internal/"
+    "websiteUrl": "https://fishtank.formationlabs.co.kr/",
+    "privacyUrl": "https://fishtank.formationlabs.co.kr/",
+    "termsOfUseUrl": "https://fishtank.formationlabs.co.kr/"
   },
   "name": {
     "short": "랜선어항",
@@ -26,15 +26,15 @@
     {
       "entityId": "fishtank-main",
       "name": "어항",
-      "contentUrl": "https://fishtank.fllab.internal/",
-      "websiteUrl": "https://fishtank.fllab.internal/",
+      "contentUrl": "https://fishtank.formationlabs.co.kr/",
+      "websiteUrl": "https://fishtank.formationlabs.co.kr/",
       "scopes": ["personal"]
     }
   ],
   "permissions": ["identity"],
-  "validDomains": ["fishtank.fllab.internal"],
+  "validDomains": ["fishtank.formationlabs.co.kr"],
   "webApplicationInfo": {
     "id": "__TEAMS_APP_CLIENT_ID__",
-    "resource": "api://fishtank.fllab.internal/__TEAMS_APP_CLIENT_ID__"
+    "resource": "api://fishtank.formationlabs.co.kr/__TEAMS_APP_CLIENT_ID__"
   }
 }

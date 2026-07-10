@@ -17,9 +17,9 @@ services:
       DATABASE_URL: postgres://fishtank:${FISHTANK_DB_PASSWORD:?}@fishtank-db:5432/fishtank
       TEAMS_APP_CLIENT_ID: ${TEAMS_APP_CLIENT_ID:?}
       # Application ID URI(도메인 포함). 토큰 aud 가 이 값으로 오므로 허용 목록에 포함된다.
-      # Teams SSO 는 resource 도메인이 iframe origin(fishtank.fllab.internal)과
+      # Teams SSO 는 resource 도메인이 iframe origin(fishtank.formationlabs.co.kr)과
       # 일치할 것을 요구하므로 도메인 형태가 필수다.
-      TEAMS_APP_ID_URI: api://fishtank.fllab.internal/${TEAMS_APP_CLIENT_ID:?}
+      TEAMS_APP_ID_URI: api://fishtank.formationlabs.co.kr/${TEAMS_APP_CLIENT_ID:?}
       TEAMS_TENANT_ID: ${TEAMS_TENANT_ID:?}
     depends_on:
       fishtank-db:
