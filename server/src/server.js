@@ -9,6 +9,7 @@ import { createApp } from "./app.js";
 import { resolveVerifier } from "./auth/devAuth.js";
 import { createPoolFromEnv } from "./db/pool.js";
 import { PgFishRepository } from "./fish/pgFishRepository.js";
+import { PgCatchRepository } from "./catch/pgCatchRepository.js";
 import { InMemoryBroadcaster } from "./realtime/broadcaster.js";
 import { attachRealtime } from "./realtime/wsGateway.js";
 
@@ -24,13 +25,18 @@ const serveStatic = existsSync(staticDir);
 // 환경 변수에서 검증 함수를 선택해 앱에 주입한다.
 // 기본은 실제 Teams SSO 검증이며, DEV_AUTH_BYPASS(비프로덕션)일 때만 개발 우회를 쓴다.
 const verify = resolveVerifier(process.env);
-// 환경 변수(DATABASE_URL)로 PostgreSQL 저장소를 구성해 주입한다 (REQ-PERSIST-001).
-const fishRepository = new PgFishRepository(createPoolFromEnv(process.env));
+// 환경 변수(DATABASE_URL)로 PostgreSQL 풀을 구성해 저장소들이 공유한다 (REQ-PERSIST-001).
+const pool = createPoolFromEnv(process.env);
+const fishRepository = new PgFishRepository(pool);
+// 개인 수집함 저장소 (SPEC-CATCH-001, REQ-SNAP-001). 같은 풀을 재사용한다.
+const catchRepository = new PgCatchRepository(pool);
 // 실시간 브로드캐스터를 앱과 WS 게이트웨이가 공유한다 (REQ-RT-001/002).
+// 낚시/수집함은 이 브로드캐스터를 사용하지 않는다 — 완전 비공개(REQ-PRIV-002).
 const broadcaster = new InMemoryBroadcaster();
 const app = createApp({
   verify,
   fishRepository,
+  catchRepository,
   broadcaster,
   staticDir: serveStatic ? staticDir : undefined,
 });

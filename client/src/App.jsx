@@ -7,6 +7,7 @@ import {
 import { acquireMsalToken } from "./auth/msalAuth.js";
 import FishComposer from "./fish/FishComposer.jsx";
 import FishTank from "./tank/FishTank.jsx";
+import MyCollection from "./catch/MyCollection.jsx";
 
 // 기본 인증 함수: Microsoft SSO(MSAL) 토큰을 획득하고 백엔드에서 신원을 검증받는다.
 // 테스트에서는 authenticate prop 을 주입해 이 경로를 대체한다. (REQ-AUTH-001/002)
@@ -38,12 +39,19 @@ async function defaultAuthenticate() {
  * @param {{authenticate?: () => Promise<{userId:string, displayName:string}>,
  *          tankProps?: object}} props
  *   tankProps 는 어항(FishTank)에 주입할 스냅샷/실시간 의존성(테스트용).
+ *   collectionProps 는 수집함(MyCollection)에 주입할 조회 의존성(테스트용).
  */
-export default function App({ authenticate = defaultAuthenticate, tankProps = {} }) {
+export default function App({
+  authenticate = defaultAuthenticate,
+  tankProps = {},
+  collectionProps = {},
+}) {
   const [state, dispatch] = useReducer(authReducer, initialAuthState);
   // 쓰기 제출용 토큰(신원과 별도로 보관, 인증 머신은 변경하지 않음).
   const [token, setToken] = useState(null);
   const [composing, setComposing] = useState(false);
+  // 상위 뷰 전환: 공유 어항(tank, 기본) ↔ 내 수집함(collection) (REQ-COLL-002).
+  const [view, setView] = useState("tank");
 
   // 인증 시도(최초 마운트 + 재시도 공용). REQ-AUTH-001.
   const runAuth = useCallback(async () => {
@@ -80,9 +88,58 @@ export default function App({ authenticate = defaultAuthenticate, tankProps = {}
         fontFamily: "system-ui, -apple-system, sans-serif",
       }}
     >
-      {/* 어항: 인증 완료 시 화면 전체 배경으로 채운다 (REQ-RT-004) */}
-      {state.status === "authenticated" && (
+      {/* 어항: 인증 완료 + 어항 뷰일 때 화면 전체 배경으로 채운다 (REQ-RT-004) */}
+      {state.status === "authenticated" && view === "tank" && (
         <FishTank token={token} {...tankProps} />
+      )}
+
+      {/* 내 수집함: 공유 어항과 분리된 별도 화면 (REQ-COLL-002) */}
+      {state.status === "authenticated" && view === "collection" && (
+        <MyCollection token={token} {...collectionProps} />
+      )}
+
+      {/* 상단 우측: 뷰 전환(공유 어항 ↔ 내 수집함). 실제 버튼이라 키보드 조작 가능(NFR-A11Y-001). */}
+      {state.status === "authenticated" && (
+        <div
+          role="group"
+          aria-label="화면 전환"
+          style={{
+            position: "absolute",
+            top: 14,
+            right: 16,
+            zIndex: 10,
+            display: "flex",
+            gap: 8,
+          }}
+        >
+          {[
+            { key: "tank", label: "공유 어항" },
+            { key: "collection", label: "내 수집함" },
+          ].map((v) => {
+            const active = view === v.key;
+            return (
+              <button
+                key={v.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setView(v.key)}
+                style={{
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "8px 16px",
+                  fontSize: 14,
+                  fontWeight: active ? 700 : 500,
+                  cursor: "pointer",
+                  background: active ? "#1d4ed8" : "rgba(255,255,255,0.92)",
+                  color: active ? "#fff" : "#1f2933",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.18)",
+                }}
+              >
+                {v.label}
+              </button>
+            );
+          })}
+        </div>
       )}
 
       {/* 상단 좌측: 타이틀 + 인사 (플로팅) */}
@@ -139,13 +196,14 @@ export default function App({ authenticate = defaultAuthenticate, tankProps = {}
         </div>
       )}
 
-      {/* 하단 중앙: 물고기 그리기 플로팅 버튼 (항상 렌더, 미인증 시 비활성 — REQ-AUTH-004) */}
+      {/* 하단 중앙: 물고기 그리기 플로팅 버튼 (어항 뷰에서만 노출, 미인증 시 비활성 — REQ-AUTH-004).
+          수집함 뷰에서는 그리기가 맥락에 맞지 않아 숨긴다(기존 어항 뷰 동작은 그대로 유지). */}
+      {view === "tank" && (
       <div
         style={{
           position: "absolute",
-          left: "50%",
+          left: 16,
           bottom: 20,
-          transform: "translateX(-50%)",
           zIndex: 10,
         }}
       >
@@ -168,6 +226,7 @@ export default function App({ authenticate = defaultAuthenticate, tankProps = {}
           물고기 그리기
         </button>
       </div>
+      )}
 
       {/* 그리기 모달: 인증 완료 + 그리기 시작 시에만 노출 */}
       {composing && writeEnabled && (

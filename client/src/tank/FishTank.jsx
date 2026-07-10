@@ -8,8 +8,23 @@ import {
   selectAnimated,
 } from "./tankModel.js";
 import { scatterFood, stepFoods, reactToFoods, consumeFoods } from "./feedingModel.js";
+import {
+  gameReducer,
+  initialGameState,
+  fishInZone,
+  rollBiter,
+  BITE_RADIUS,
+  BITE_WINDOW_MS,
+  BITE_CHANCE,
+  IDLE,
+  CAST,
+  BITING,
+  CAUGHT,
+  ESCAPED,
+} from "./fishingGame.js";
 import { fishInfo } from "./fishInfo.js";
 import { fetchFishSnapshot, deleteFish as deleteFishApi } from "../fish/fishApi.js";
+import { catchFish as catchFishApi } from "../catch/catchApi.js";
 import { sendFeed as sendFeedApi } from "./feedApi.js";
 import { connectRealtime, defaultRealtimeUrl } from "./realtimeClient.js";
 import { colors } from "../theme/colors.js";
@@ -31,6 +46,16 @@ const CHOMP_SPEED = 14;
 // 창 크기 측정 전 초기 기본값(가변 어항). jsdom 등 ResizeObserver 미지원 시에도 유지된다.
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 450;
+
+// @MX:NOTE: [AUTO] 낚시 게임 틱 주기(ms). 이 주기마다 입질 판정/도망 타이머를 갱신한다.
+//   rAF(그리기)와 분리해 두어 테스트에서 가짜 타이머로 결정적으로 구동할 수 있다.
+const GAME_TICK_MS = 100;
+// @MX:NOTE: [AUTO] 건짐 성공/도망 연출을 보여준 뒤 찌를 걷어 다시 던질 수 있게 되기까지의 지연(ms).
+const CLEAR_DELAY_MS = 1400;
+// @MX:NOTE: [AUTO] 입질 중 물고기가 바둥바둥 제자리에서 떠는 진폭(px). 훅 지점 주위 오실레이션 크기.
+const STRUGGLE_AMPLITUDE = 6;
+// @MX:NOTE: [AUTO] 건져올리기 성공 시 물고기가 수면 위로 끌려 올라가는 모션 길이(ms). CLEAR_DELAY_MS 안에 끝나야 한다.
+const REEL_UP_MS = 650;
 
 // 기본 스냅샷 로더는 모듈 스코프에 두어 참조를 고정한다. 컴포넌트 안에서 인라인 화살표로
 // 기본값을 주면 매 렌더마다 새 함수가 생겨 resync → 마운트 useEffect 가 재실행되고,
@@ -74,6 +99,9 @@ function labelFor(f) {
  * @param {string} [props.realtimeUrl]
  * @param {(params:{token:string,id:string})=>Promise<void>} [props.deleteFish] - 삭제 API(테스트 주입)
  * @param {(params:{token:string,x:number,y:number})=>Promise<void>} [props.onFeed] - 먹이주기 공유 API(테스트 주입, REQ-INT-003)
+ * @param {(params:{token:string,id:string})=>Promise<object>} [props.catchFish] - 낚시 API(테스트 주입, REQ-CATCH-001)
+ * @param {()=>{id:string,x:number,y:number}[]} [props.getSpritePositions] - 입질 판정용 현재 물고기 위치 제공자(테스트 주입). 기본은 실시간 시뮬레이션 렌더 위치.
+ * @param {()=>number} [props.rng] - 입질 확률 굴림용 난수원(테스트 주입, 기본 Math.random).
  */
 export default function FishTank({
   token,
@@ -82,10 +110,18 @@ export default function FishTank({
   realtimeUrl = defaultRealtimeUrl(),
   deleteFish = deleteFishApi,
   onFeed = sendFeedApi,
+  catchFish = catchFishApi,
+  getSpritePositions,
+  rng = Math.random,
 }) {
   const [state, dispatch] = useReducer(tankReducer, initialTankState);
   const [selectedId, setSelectedId] = useState(null); // 정보 조회 대상(REQ-INT-002)
   const [feedMessage, setFeedMessage] = useState(""); // 먹이주기 접근성 안내(aria-live)
+  const [catchMessage, setCatchMessage] = useState(""); // 낚시 게임 진행/결과 접근성 안내(aria-live)
+  // 동일 낚시 문구를 반복해도 라이브 영역이 재낭독되도록 콘텐츠 키를 바꾸는 카운터(NFR-A11Y-001).
+  const [catchAnnounceCount, setCatchAnnounceCount] = useState(0);
+  // 낚시 미니게임 상태(던지기→입질→건짐|도망). 순수 리듀서(fishingGame.js)로 전이한다.
+  const [game, dispatchGame] = useReducer(gameReducer, undefined, initialGameState);
   // @MX:NOTE: [AUTO] 먹이 안내 재낭독 카운터. 동일 문구를 반복해도 라이브 영역 콘텐츠가
   //   바뀌도록(key 재마운트) 하여 스크린리더가 매번 재낭독하게 한다(NFR-A11Y-001).
   const [feedAnnounceCount, setFeedAnnounceCount] = useState(0);
@@ -98,6 +134,12 @@ export default function FishTank({
   const spritesRef = useRef(new Map()); // id → sprite(위치/속도), 프레임 간 유지
   const foodsRef = useRef([]); // 임시 먹이 아이템(REQ-INT-001), 프레임 간 유지
   const boundsRef = useRef({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT }); // 애니메이션 루프가 읽는 현재 헤엄 범위
+  // 게임 루프(setInterval)와 rAF 그리기가 최신 게임 상태를 리렌더 없이 읽도록 미러링한다.
+  const gameRef = useRef(game);
+  gameRef.current = game;
+  // 찌 반경 안에 "현재 들어와 있는" 물고기 id 집합. 새로 진입한 물고기만 입질 확률을 굴리기 위해
+  // 이전 틱의 집합과 비교한다(같은 물고기를 매 틱 재굴림하지 않도록, BITE_CHANCE).
+  const zoneRef = useRef(new Set());
 
   // OS 다크 모드에 따라 어항 배경 이미지를 전환한다. jsdom 등 matchMedia 미지원 시 라이트 유지.
   useEffect(() => {
@@ -202,6 +244,128 @@ export default function FishTank({
     });
   }, [addFoodLocal, onFeed, token]);
 
+  // 동일 문구여도 콘텐츠 키를 올려 라이브 영역이 재낭독되게 하는 공용 안내 함수(NFR-A11Y-001).
+  const announce = useCallback((msg) => {
+    setCatchMessage(msg);
+    setCatchAnnounceCount((n) => n + 1);
+  }, []);
+
+  // 입질 판정에 쓸 현재 물고기 위치 제공자. 기본은 실시간 시뮬레이션의 렌더 좌표(spritesRef).
+  // 테스트는 getSpritePositions prop 으로 결정적 위치를 주입한다.
+  const spritePositions = useCallback(() => {
+    if (getSpritePositions) return getSpritePositions();
+    return Array.from(spritesRef.current.values()).map((s) => ({
+      id: s.id,
+      x: s.x,
+      y: s.y,
+    }));
+  }, [getSpritePositions]);
+
+  // 낚싯대 던지기 (REQ-CATCH-001 게임 진입). target 이 있으면 그 지점(캔버스 클릭 조준),
+  // 없으면 어항 중앙 수면 근처로 던진다(버튼 = 조준 불필요한 접근성 경로, NFR-A11Y-001).
+  const handleCast = useCallback((target) => {
+    if (gameRef.current.phase !== IDLE) return; // 찌는 한 번에 하나
+    const bounds = boundsRef.current;
+    const pos = target ?? { x: bounds.width / 2, y: bounds.height / 2 };
+    dispatchGame({ type: "CAST", x: pos.x, y: pos.y });
+  }, []);
+
+  // 캔버스 클릭 조준(선택적 향상). 대기 상태에서만 클릭 지점으로 던진다.
+  const handleCanvasClick = useCallback(
+    (e) => {
+      if (gameRef.current.phase !== IDLE) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      // 캔버스는 CSS 로 100% 늘어나므로 표시 크기 대비 내부 좌표계로 환산한다.
+      const scaleX = rect.width ? boundsRef.current.width / rect.width : 1;
+      const scaleY = rect.height ? boundsRef.current.height / rect.height : 1;
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top) * scaleY;
+      handleCast({ x, y });
+    },
+    [handleCast],
+  );
+
+  // 건져올리기 (REQ-CATCH-001). 입질 중(타이밍 창 안)일 때만 성공한다. 성공 시 물고기의 원본 ID로
+  // catch API 를 호출해 개인 수집함에 담는다. [CRITICAL] 비파괴(REQ-CATCH-003): 어항 상태(state.fish)를
+  // 바꾸지 않고 실시간 이벤트도 보내지 않는다(REQ-PRIV-002). 결과는 본인 안내 문구로만 반영한다.
+  const handleReel = useCallback(() => {
+    const g = gameRef.current;
+    if (g.phase !== BITING || !g.biterId) return; // 타이밍을 놓치면 헛챔질
+    const biterId = g.biterId;
+    dispatchGame({ type: "REEL", now: Date.now() }); // biting → caught (끌어올리기 모션 시작)
+    catchFish({ token, id: biterId })
+      .then((res) => {
+        // 신규면 담김, 중복(alreadyCollected)이면 멱등 안내(REQ-CATCH-005).
+        announce(
+          res?.alreadyCollected ? "이미 수집함에 있어요." : "잡았다! 수집함에 담겼어요.",
+        );
+      })
+      .catch((err) => {
+        // 원본이 사라진 경우(404) 안내(REQ-CATCH-004). 그 외는 일반 실패 안내.
+        announce(
+          err?.code === "not_found"
+            ? "물고기가 사라졌어요."
+            : "낚기에 실패했어요. 잠시 후 다시 시도해 주세요.",
+        );
+      });
+  }, [catchFish, token, announce]);
+
+  // 게임 루프: 입질 판정(확률) + 도망 타이머. rAF(그리기)와 분리한 setInterval 로 돌려
+  // 테스트에서 가짜 타이머로 결정적으로 구동한다. Date.now() 는 가짜 타이머에 함께 묶인다.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const g = gameRef.current;
+      if (g.phase === CAST) {
+        // 반경 안 물고기 중 "이번에 새로 진입한" 물고기만 확률 굴림한다(진입당 1회, 매 틱 재굴림 아님).
+        const zone = fishInZone(spritePositions(), g.bobber, BITE_RADIUS);
+        const fresh = [];
+        for (const fid of zone) if (!zoneRef.current.has(fid)) fresh.push(fid);
+        zoneRef.current = zone;
+        const biter = rollBiter(fresh, BITE_CHANCE, rng);
+        if (biter) dispatchGame({ type: "BITE", biterId: biter, now: Date.now() });
+      } else {
+        // 캐스트 상태가 아니면 진입 이력을 비운다 — 다음 캐스트에서 처음부터 새로 굴리도록.
+        if (zoneRef.current.size) zoneRef.current = new Set();
+        if (g.phase === BITING && Date.now() - (g.biteStart ?? 0) >= BITE_WINDOW_MS) {
+          dispatchGame({ type: "TICK", now: Date.now() });
+        }
+      }
+    }, GAME_TICK_MS);
+    return () => clearInterval(id);
+  }, [spritePositions, rng]);
+
+  // 단계 전이에 따른 안내(입질/도망/던짐). 건짐 성공 문구는 handleReel 의 API 응답에서 낸다.
+  useEffect(() => {
+    if (game.phase === CAST) announce("낚싯대를 던졌어요. 입질을 기다려요.");
+    else if (game.phase === BITING) announce("입질이 왔어요! 지금 건져올리기!");
+    else if (game.phase === ESCAPED) announce("미끼만 먹고 도망갔어요!");
+  }, [game.phase, announce]);
+
+  // 도망 연출: 입질하던 물고기가 찌에서 멀어지는 방향으로 확 튀게 속도를 준다(캔버스 시각 효과).
+  // 어항 상태(state.fish)는 건드리지 않으므로 비파괴 불변식과 무관하다(REQ-CATCH-003).
+  useEffect(() => {
+    if (game.phase !== ESCAPED || !game.biterId || !game.bobber) return;
+    const s = spritesRef.current.get(game.biterId);
+    if (!s) return;
+    const dx = s.x - game.bobber.x;
+    const dy = s.y - game.bobber.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const DART = 300; // 도망 순간 속도(px/s)
+    spritesRef.current.set(game.biterId, {
+      ...s,
+      vx: (dx / d) * DART,
+      vy: (dy / d) * DART,
+      facing: dx >= 0 ? 1 : -1,
+    });
+  }, [game.phase, game.biterId, game.bobber]);
+
+  // 건짐/도망 후 잠시 연출을 보여준 뒤 찌를 걷어 다시 던질 수 있게 한다(idle 복귀).
+  useEffect(() => {
+    if (game.phase !== CAUGHT && game.phase !== ESCAPED) return undefined;
+    const t = setTimeout(() => dispatchGame({ type: "CLEAR" }), CLEAR_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [game.phase]);
+
   // 선택된 물고기 정보(REQ-INT-002). 삭제 등으로 사라지면 패널도 자동으로 닫힌다.
   const selectedFish = state.fish.find((f) => f.id === selectedId) ?? null;
   const selectedInfo = selectedFish ? fishInfo(selectedFish) : null;
@@ -237,7 +401,18 @@ export default function FishTank({
       const stepped = stepSprites(flocked, dt, bounds);
       foodsRef.current = consumeFoods(stepped, foodsRef.current);
       for (const s of stepped) map.set(s.id, s);
-      drawTank(canvasRef.current, selectAnimated(stepped), bounds, now, foodsRef.current);
+      // 훅에 걸린 물고기 시각 오버라이드(공유 어항 state.fish 는 불변 — 비파괴 REQ-CATCH-003):
+      //  - 입질 중: 찌 근처 훅 지점에 고정하고 바둥바둥 떨게 한다(제자리 스트러글).
+      //  - 건짐 성공: 훅 지점에서 수면 위로 끌려 올라가는 모션.
+      applyHookedMotion(map, gameRef.current, now);
+      drawTank(
+        canvasRef.current,
+        selectAnimated(stepped),
+        bounds,
+        now,
+        foodsRef.current,
+        gameRef.current,
+      );
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -309,13 +484,96 @@ export default function FishTank({
         aria-label="어항"
         role="img"
         aria-describedby="tank-canvas-desc"
+        onClick={handleCanvasClick}
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
       />
-      {/* 캔버스는 키보드로 조작할 수 없으므로, 아래 목록/버튼이 접근성 대체 수단이다(NFR-A11Y-001). */}
+      {/* 캔버스는 키보드로 조작할 수 없으므로, 아래 목록/버튼이 접근성 대체 수단이다(NFR-A11Y-001).
+          낚시도 캔버스 조준(클릭)은 마우스 전용 향상일 뿐, '낚싯대 던지기'/'건져올리기' 버튼으로 완전히 조작 가능하다. */}
       <p id="tank-canvas-desc" style={srOnly}>
         헤엄치는 물고기 그림입니다. 목록에서 각 물고기를 선택해 정보를 보거나,
         본인 물고기를 삭제하고, 먹이 주기 버튼으로 먹이를 줄 수 있어요.
+        낚싯대 던지기 버튼으로 찌를 던지고, 물고기가 입질하면 건져올리기 버튼으로 낚아 수집함에 담을 수 있어요.
       </p>
+
+      {/* 하단 중앙 플로팅 컨트롤: 낚시 미니게임(던지기/건져올리기) + 안내 라이브 영역.
+          두 버튼 모두 실제 <button> 이라 키보드로 완전히 조작 가능하다(NFR-A11Y-001). */}
+      <div
+        role="group"
+        aria-label="낚시"
+        style={{
+          position: "absolute",
+          left: "50%",
+          bottom: 20,
+          transform: "translateX(-50%)",
+          zIndex: 5,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 8,
+          maxWidth: "min(360px, 90vw)",
+        }}
+      >
+        <div style={{ display: "flex", gap: 8 }}>
+          {/* 낚싯대 던지기: 대기 상태에서만 활성. 조준 없이 기본 지점으로 던지는 접근성 경로. */}
+          <button
+            type="button"
+            onClick={() => handleCast()}
+            disabled={game.phase !== IDLE}
+            aria-disabled={game.phase !== IDLE}
+            style={{
+              background: game.phase === IDLE ? colors.primary : "#9aa3ad",
+              color: colors.onPrimary,
+              border: "none",
+              borderRadius: 999,
+              padding: "10px 16px",
+              fontWeight: 600,
+              boxShadow: "0 4px 12px rgba(0,0,0,0.18)",
+              cursor: game.phase === IDLE ? "pointer" : "not-allowed",
+            }}
+          >
+            낚싯대 던지기
+          </button>
+          {/* 건져올리기: 입질 중(타이밍 창)일 때만 활성. 놓치면 물고기가 도망간다. */}
+          <button
+            type="button"
+            onClick={handleReel}
+            disabled={game.phase !== BITING}
+            aria-disabled={game.phase !== BITING}
+            style={{
+              background: game.phase === BITING ? colors.danger : "#9aa3ad",
+              color: colors.onPrimary,
+              border: "none",
+              borderRadius: 999,
+              padding: "10px 16px",
+              fontWeight: 600,
+              boxShadow: "0 4px 12px rgba(0,0,0,0.18)",
+              cursor: game.phase === BITING ? "pointer" : "not-allowed",
+            }}
+          >
+            건져올리기
+          </button>
+        </div>
+
+        {/* 낚시 안내 라이브 영역. key 로 재마운트해 동일 문구도 재낭독한다(NFR-A11Y-001). */}
+        {catchMessage && (
+          <p
+            key={catchAnnounceCount}
+            role="status"
+            aria-label="낚시 안내"
+            aria-live="assertive"
+            data-announce-count={catchAnnounceCount}
+            style={{
+              margin: 0,
+              fontSize: 13,
+              color: "#fff",
+              textShadow: "0 1px 3px rgba(0,0,0,0.6)",
+              minHeight: 18,
+            }}
+          >
+            {catchMessage}
+          </p>
+        )}
+      </div>
 
       {/* 하단 우측 플로팅 컨트롤: 목록 패널(토글) + 목록/먹이 버튼 + 먹이 안내. */}
       <div
@@ -412,19 +670,18 @@ export default function FishTank({
             {/* 물고기 정보 패널 (REQ-INT-002). 익명은 "익명"으로만, 소유자 신원은 절대 미노출. */}
             {selectedFish && (
               <div
-                role="status"
-                aria-label="물고기 정보"
                 style={{
                   marginTop: 10,
                   paddingTop: 10,
                   borderTop: `1px solid ${colors.border}`,
-                  color: colors.text,
                 }}
               >
-                <p style={{ margin: 0, fontWeight: 600 }}>{selectedInfo.label}</p>
-                <p style={{ margin: "2px 0 0", color: colors.muted, fontSize: 13 }}>
-                  등록 시각: {selectedInfo.createdAt}
-                </p>
+                <div role="status" aria-label="물고기 정보" style={{ color: colors.text }}>
+                  <p style={{ margin: 0, fontWeight: 600 }}>{selectedInfo.label}</p>
+                  <p style={{ margin: "2px 0 0", color: colors.muted, fontSize: 13 }}>
+                    등록 시각: {selectedInfo.createdAt}
+                  </p>
+                </div>
               </div>
             )}
           </div>
@@ -489,7 +746,7 @@ export default function FishTank({
 }
 
 // 캔버스에 먹이와 스프라이트를 그린다. 2D 컨텍스트 미지원(jsdom) 환경에서는 무시한다.
-function drawTank(canvas, sprites, bounds, now, foods = []) {
+function drawTank(canvas, sprites, bounds, now, foods = [], game = null) {
   if (!canvas) return;
   let ctx = null;
   try {
@@ -506,6 +763,75 @@ function drawTank(canvas, sprites, bounds, now, foods = []) {
   for (const sprite of sprites) {
     drawFishSprite(ctx, sprite, now);
   }
+  if (game && game.bobber) {
+    drawBobber(ctx, game, now);
+  }
+}
+
+// 건져올리기 진행도(0..1). CAUGHT 상태에서 caughtAt 이후 경과 시간을 REEL_UP_MS 로 정규화한다.
+// 그리기(rAF)와 게임 타이머가 같은 Date 클록을 쓰도록 Date.now() 기준으로 계산한다.
+function reelProgress(game) {
+  if (game.phase !== CAUGHT || game.caughtAt == null) return 0;
+  return Math.min(1, Math.max(0, (Date.now() - game.caughtAt) / REEL_UP_MS));
+}
+
+// 훅에 걸린 물고기의 위치를 시각적으로 오버라이드한다(스프라이트 객체를 제자리 변형).
+// map 의 스프라이트는 stepped 배열과 같은 참조이므로 여기서 바꾸면 그리기에 즉시 반영된다.
+// state.fish(공유 어항)는 절대 건드리지 않는다 — 비파괴/비공유 불변식 유지(REQ-CATCH-003/PRIV-002).
+function applyHookedMotion(map, game, now) {
+  if (!game.biterId || !game.bobber) return;
+  const s = map.get(game.biterId);
+  if (!s) return;
+  const t = (typeof now === "number" ? now : 0) / 1000;
+  if (game.phase === BITING) {
+    // 바둥바둥: 훅 지점(찌)에 고정하고 서로 다른 주파수의 진동으로 제자리에서 발버둥친다.
+    s.x = game.bobber.x + Math.sin(t * 30) * STRUGGLE_AMPLITUDE;
+    s.y = game.bobber.y + Math.cos(t * 37) * STRUGGLE_AMPLITUDE;
+    s.vx = 0;
+    s.vy = 0;
+    s.eat = 0;
+  } else if (game.phase === CAUGHT) {
+    // 끌려 올라가기: 훅 지점에서 수면 위(-40)로 선형 이동.
+    const p = reelProgress(game);
+    s.x = game.bobber.x;
+    s.y = game.bobber.y * (1 - p) - 40 * p;
+    s.vx = 0;
+    s.vy = 0;
+  }
+  map.set(game.biterId, s);
+}
+
+// 찌(bobber)를 그린다. 입질 중(biting)이면 위아래로 까딱까딱, 건짐 시엔 물고기와 함께 수면 위로 끌려 올라간다.
+function drawBobber(ctx, game, now) {
+  const { x, y } = game.bobber;
+  const biting = game.phase === BITING;
+  const t = (typeof now === "number" ? now : 0) / 1000;
+  // 입질 중에는 빠르고 큰 진폭으로 까딱인다(찌올림/입질 느낌). 대기 중엔 잔잔히 일렁인다.
+  const dip = biting ? Math.sin(t * 18) * 5 : Math.sin(t * 2) * 1.5;
+  // 건짐 시 찌도 물고기를 따라 수면 위로 끌려 올라간다.
+  const rise = game.phase === CAUGHT ? (y + 40) * reelProgress(game) : 0;
+  const by = y + dip - rise;
+
+  ctx.save();
+  // 수면에서 찌까지 이어지는 낚싯줄.
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, by - 8);
+  ctx.strokeStyle = "rgba(255,255,255,0.65)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // 찌 몸통: 위(빨강)/아래(흰) 반반. 입질 중엔 조금 커진다.
+  const r = biting ? 8 : 6;
+  ctx.beginPath();
+  ctx.arc(x, by, r, 0, Math.PI * 2);
+  ctx.fillStyle = "#e11d48";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x, by + r * 0.5, r * 0.55, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.restore();
 }
 
 // 먹이 알갱이를 그린다(물고기 뒤 레이어). 작은 단색 점 하나로 단순하게.

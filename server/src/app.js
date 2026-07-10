@@ -3,7 +3,9 @@ import express from "express";
 import { authRequired } from "./auth/authMiddleware.js";
 import { meRouter } from "./routes/me.js";
 import { fishRouter } from "./routes/fish.js";
+import { catchRouter } from "./routes/catch.js";
 import { InMemoryFishRepository } from "./fish/fishRepository.js";
+import { InMemoryCatchRepository } from "./catch/catchRepository.js";
 import { InMemoryBroadcaster } from "./realtime/broadcaster.js";
 
 // Teams 클라이언트(데스크톱/웹)에서의 iframe 임베드만 허용하는 CSP.
@@ -23,6 +25,8 @@ const FRAME_ANCESTORS_CSP =
  * @param {(token:string)=>Promise<object>} deps.verify - 주입된 토큰 검증 함수.
  * @param {{create:Function,list:Function}} [deps.fishRepository]
  *   물고기 저장소. 미주입 시 인메모리 구현을 사용한다(프로덕션은 Pg 구현 주입).
+ * @param {{create:Function,listByCatcher:Function,findByCatcherAndSource:Function}} [deps.catchRepository]
+ *   수집(낚시) 저장소. 미주입 시 인메모리 구현을 사용한다(프로덕션은 Pg 구현 주입).
  * @param {{broadcast:Function,subscribe:Function}} [deps.broadcaster]
  *   실시간 브로드캐스터. 미주입 시 인메모리 구현을 사용한다(REQ-RT-001).
  * @param {string} [deps.staticDir]
@@ -33,6 +37,7 @@ const FRAME_ANCESTORS_CSP =
 export function createApp({
   verify,
   fishRepository = new InMemoryFishRepository(),
+  catchRepository = new InMemoryCatchRepository(),
   broadcaster = new InMemoryBroadcaster(),
   staticDir,
 }) {
@@ -50,6 +55,8 @@ export function createApp({
     authRequired(verify),
     meRouter(),
     fishRouter(fishRepository, broadcaster),
+    // 낚시/수집함: 브로드캐스터 미주입 — 완전 비공개, 실시간 전파 없음(REQ-PRIV-002).
+    catchRouter(fishRepository, catchRepository),
   );
 
   // 프로덕션: 클라이언트 빌드를 같은 오리진에서 서빙한다(Teams 탭 + WS 단일 도메인).
