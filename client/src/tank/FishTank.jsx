@@ -28,20 +28,8 @@ import { catchFish as catchFishApi } from "../catch/catchApi.js";
 import { sendFeed as sendFeedApi } from "./feedApi.js";
 import { connectRealtime, defaultRealtimeUrl } from "./realtimeClient.js";
 import { colors } from "../theme/colors.js";
-import { TAIL_FOLD_FRACTION, MOUTH_FRACTION } from "../drawing/drawingModel.js";
-
-// 물고기 렌더 크기(원본 그림 대비 축소). 어항에서 아담하게 보이도록.
-const SPRITE_SCALE = 0.3;
-// 꼬리 파닥임 최대 각도(라디안)와 속도(라디안/초).
-const TAIL_MAX_ANGLE = 0.5;
-const TAIL_SPEED = 7;
-
-// 입(머리) 꿀렁임: 그림 오른쪽(머리) 영역만 먹이 반응 시 벌렁거린다. 경계선 위치는
-// 물고기별 mouthFraction(사용자 지정) 또는 기본 MOUTH_FRACTION 을 쓰며, 스낫 끝에서 가장 크게 벌어진다.
-// 입이 최대로 벌어질 때의 상하 벌림 폭(그림 높이 대비 비율).
-const MOUTH_MAX_OPEN = 0.16;
-// 입을 여닫는 속도(라디안/초). 꼬리보다 빠르게 오물거린다.
-const CHOMP_SPEED = 14;
+// 렌더 캐싱/애니메이션은 세 렌더러 공용 모듈에 있다(SPEC-RASTER-001 M3). SPRITE_SCALE 은 이름표 위치에 쓴다.
+import { createSpriteCache, drawFishBitmap, SPRITE_SCALE } from "../drawing/fishSprite.js";
 
 // 창 크기 측정 전 초기 기본값(가변 어항). jsdom 등 ResizeObserver 미지원 시에도 유지된다.
 const DEFAULT_WIDTH = 800;
@@ -147,6 +135,7 @@ export default function FishTank({
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const spritesRef = useRef(new Map()); // id → sprite(위치/속도), 프레임 간 유지
+  const spriteCacheRef = useRef(createSpriteCache()); // id → 오프스크린 비트맵 캐시(REQ-RENDER-001/002)
   const foodsRef = useRef([]); // 임시 먹이 아이템(REQ-INT-001), 프레임 간 유지
   const ripplesRef = useRef([]); // 착수/입질 물보라 파문(캔버스 전용 시각 효과), 프레임 간 유지
   const boundsRef = useRef({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT }); // 애니메이션 루프가 읽는 현재 헤엄 범위
@@ -416,6 +405,8 @@ export default function FishTank({
     for (const id of map.keys()) {
       if (!ids.has(id)) map.delete(id);
     }
+    // 사라진 물고기의 비트맵 캐시를 축출한다(REQ-RENDER-002, 캐시 무한 증가 방지).
+    spriteCacheRef.current.prune(ids);
   }, [state.fish]);
 
   // 애니메이션 루프. jsdom 등 rAF 미지원 환경에서는 조용히 건너뛴다(로직은 tankModel 로 검증).
@@ -452,6 +443,7 @@ export default function FishTank({
         foodsRef.current,
         gameRef.current,
         ripplesRef.current,
+        spriteCacheRef.current,
       );
       raf = requestAnimationFrame(frame);
     };
@@ -791,7 +783,7 @@ function rodTip(bounds) {
 }
 
 // 캔버스에 먹이와 스프라이트를 그린다. 2D 컨텍스트 미지원(jsdom) 환경에서는 무시한다.
-function drawTank(canvas, sprites, bounds, now, foods = [], game = null, ripples = []) {
+function drawTank(canvas, sprites, bounds, now, foods = [], game = null, ripples = [], cache = null) {
   if (!canvas) return;
   let ctx = null;
   try {
@@ -809,7 +801,7 @@ function drawTank(canvas, sprites, bounds, now, foods = [], game = null, ripples
     drawFoodPellet(ctx, food);
   }
   for (const sprite of sprites) {
-    drawFishSprite(ctx, sprite, now);
+    drawFishSprite(ctx, sprite, now, cache);
   }
   if (game && game.bobber) {
     drawBobber(ctx, game, now, bounds);
@@ -948,39 +940,6 @@ function drawFoodPellet(ctx, food) {
   ctx.fill();
 }
 
-// 물고기마다 다른 파닥임 위상을 id 에서 결정적으로 뽑는다(서로 엇박자로 흔들리게).
-function phaseFromId(id) {
-  let h = 0;
-  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return ((h % 1000) / 1000) * Math.PI * 2;
-}
-
-// 접힘선(foldX) 왼쪽 점을 피벗 기준으로 각도만큼 회전시킨다. 선에서 멀수록 크게 휜다.
-function bendPoint(p, foldX, pivotY, wave) {
-  if (p.x >= foldX) return p; // 몸통·머리 쪽(접힘선 오른쪽)은 그대로.
-  const factor = Math.min(1, (foldX - p.x) / foldX); // 접힘선 0 → 꼬리 끝 1
-  const angle = wave * factor;
-  const dx = p.x - foldX;
-  const dy = p.y - pivotY;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  return {
-    x: foldX + dx * cos - dy * sin,
-    y: pivotY + dx * sin + dy * cos,
-  };
-}
-
-// 입 벌림: 머리 영역(mouthX 오른쪽) 점을 중심선(pivotY) 기준으로 상하로 벌린다.
-// 오른쪽 끝(스낫)일수록 크게, 중심선 위/아래로 갈라 입이 열리는 모양을 만든다.
-// gapePx 는 이번 프레임의 최대 벌림 폭(px); 0 이면 원본을 그대로 돌려준다.
-function chompPoint(p, mouthX, pivotY, gapePx, w) {
-  if (gapePx <= 0 || p.x <= mouthX) return p;
-  const span = w - mouthX || 1;
-  const factor = Math.min(1, (p.x - mouthX) / span); // 경첩(0) → 스낫 끝(1)
-  const side = p.y === pivotY ? 0 : p.y > pivotY ? 1 : -1;
-  return { x: p.x, y: p.y + side * gapePx * factor };
-}
-
 // 물고기 위 이름표 텍스트: "{이름}의 물고기" / 익명은 "익명의 물고기"(REQ-OWN-004).
 function nameTagFor(sprite) {
   const name =
@@ -988,62 +947,16 @@ function nameTagFor(sprite) {
   return `${name}의 물고기`;
 }
 
-// 손그림 스트로크를 스프라이트 위치에 방향(facing)·축소·꼬리 파닥임을 적용해 그린다(REQ-DRAW-003).
-function drawFishSprite(ctx, sprite, now) {
-  const { drawing } = sprite;
-  if (!drawing || !Array.isArray(drawing.strokes)) return;
-  const w = drawing.width || 300;
-  const h = drawing.height || 200;
-  // 사용자가 물고기 생성 시 지정한 가이드 위치를 쓴다. 구버전(필드 없음)은 기본값으로 폴백.
-  const foldX = w * (drawing.tailFraction ?? TAIL_FOLD_FRACTION);
-  const mouthX = w * (drawing.mouthFraction ?? MOUTH_FRACTION);
-  const pivotY = h / 2;
-  // 시간·위상 기반 꼬리 흔들림 각도.
-  const t = (typeof now === "number" ? now : 0) / 1000;
-  const wave = Math.sin(t * TAIL_SPEED + phaseFromId(sprite.id)) * TAIL_MAX_ANGLE;
-  // 입 벌림 폭(px): 먹이 반응 세기(sprite.eat)에 여닫는 오물거림을 곱한다.
-  // 0.5-0.5*cos 는 0..1 을 오가며 입을 완전히 다물었다 벌렸다 반복하게 한다.
-  const eat = sprite.eat || 0;
-  const chomp = 0.5 - 0.5 * Math.cos(t * CHOMP_SPEED + phaseFromId(sprite.id));
-  const gapePx = eat * chomp * (h * MOUTH_MAX_OPEN);
-
-  ctx.save();
-  ctx.translate(sprite.x, sprite.y);
-  ctx.scale(sprite.facing * SPRITE_SCALE, SPRITE_SCALE); // 진행 방향 반전 + 축소
-  ctx.translate(-w / 2, -h / 2); // 그림 중심을 스프라이트 위치에 맞춤
-  for (const stroke of drawing.strokes) {
-    if (!stroke.points || stroke.points.length === 0) continue;
-    ctx.beginPath();
-    ctx.strokeStyle = stroke.color;
-    ctx.lineWidth = stroke.width;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    // 꼬리는 왼쪽(foldX 이하)만, 입은 오른쪽(mouthX 이상)만 변형하므로 두 변형은
-    // 서로 다른 영역에 작용해 합성해도 겹치지 않는다.
-    const p0 = chompPoint(
-      bendPoint(stroke.points[0], foldX, pivotY, wave),
-      mouthX,
-      pivotY,
-      gapePx,
-      w,
-    );
-    ctx.moveTo(p0.x, p0.y);
-    for (let i = 1; i < stroke.points.length; i += 1) {
-      const p = chompPoint(
-        bendPoint(stroke.points[i], foldX, pivotY, wave),
-        mouthX,
-        pivotY,
-        gapePx,
-        w,
-      );
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.stroke();
-  }
-  ctx.restore();
+// 물고기를 스프라이트 위치에 방향·축소·꼬리 파닥임·입 벌림을 적용해 그린다(REQ-DRAW-003, REQ-RENDER-*).
+// 벡터(version 1)·래스터(version 2) 모두 오프스크린 캐시 비트맵을 blit 하는 공용 구현으로 처리한다.
+function drawFishSprite(ctx, sprite, now, cache) {
+  if (!cache) return;
+  const entry = cache.getEntry(sprite);
+  if (!entry) return; // 유효한 그림이 없으면(구 조기 반환과 동일) 이름표도 그리지 않는다.
+  drawFishBitmap(ctx, entry, sprite, now); // 몸통 blit + 꼬리/입 스트립 애니메이션(래스터 디코드 전이면 무동작)
 
   // 이름표: 반전(facing) 변환 밖에서 그려 글자가 뒤집히지 않게 한다.
-  const tagY = sprite.y - (h * SPRITE_SCALE) / 2 - 8;
+  const tagY = sprite.y - (entry.height * SPRITE_SCALE) / 2 - 8;
   ctx.save();
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "center";

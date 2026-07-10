@@ -95,7 +95,9 @@ describe("App — 내 어항 탭 (3탭 전환)", () => {
     expect(arg.displayMode).toBe("named");
     expect(arg.x).toBe(300);
     expect(arg.y).toBe(180);
-    expect(arg.drawing.strokes).toHaveLength(1);
+    // 신규 물고기는 래스터(version 2)로 저장된다(REQ-COMPAT-003).
+    expect(arg.drawing.version).toBe(2);
+    expect(arg.drawing.kind).toBe("raster");
     // 공유 어항 경로는 절대 호출되지 않는다(프라이버시 불변식).
     expect(submitFish).not.toHaveBeenCalled();
   });

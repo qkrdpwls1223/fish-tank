@@ -2,102 +2,118 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import DrawingCanvas from "./DrawingCanvas.jsx";
 
-// 자유 드로잉 캔버스 컴포넌트. 포인터(마우스/터치/펜) 입력으로 그린다.
-// 커버: REQ-DRAW-001(자유 드로잉), REQ-DRAW-005(undo/clear).
-// 캔버스 2D 렌더링은 jsdom 미지원이므로 로직/상호작용만 검증한다.
+// 래스터 페인트 캔버스 컴포넌트. 포인터로 픽셀에 그리고, 페인트통·이미지 업로드·지우개·
+// undo/clear 를 제공한다. 커버: REQ-FILL-*, REQ-UPLOAD-*, REQ-ANIM-004, REQ-COMPAT-003.
+// jsdom 은 2D 컨텍스트/픽셀을 지원하지 않으므로 DOM·상호작용·전파 형태만 검증한다.
 
-describe("DrawingCanvas", () => {
-  it("접근 가능한 라벨을 가진 캔버스와 undo/clear 버튼을 렌더링한다", () => {
+describe("DrawingCanvas — 렌더링/컨트롤", () => {
+  it("접근 가능한 캔버스와 모든 도구 버튼을 렌더링한다", () => {
     render(<DrawingCanvas />);
     expect(screen.getByLabelText("물고기 그리기 캔버스")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "실행 취소" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "페인트통" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "지우개" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "실행 취소" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "초기화" })).toBeInTheDocument();
+    expect(screen.getByLabelText("꼬리 위치")).toBeInTheDocument();
+    expect(screen.getByLabelText("입 위치")).toBeInTheDocument();
   });
 
-  it("포인터로 그리면 onChange 에 스트로크가 담긴 그림을 전달한다", () => {
+  it("이미지 업로드 입력이 허용 포맷(accept)을 지정한다 (REQ-UPLOAD-002)", () => {
+    render(<DrawingCanvas />);
+    const upload = screen.getByLabelText("이미지 올리기");
+    expect(upload).toHaveAttribute("type", "file");
+    expect(upload).toHaveAttribute("accept", "image/png,image/jpeg,image/webp");
+  });
+});
+
+describe("DrawingCanvas — onChange (version 2 래스터)", () => {
+  it("마운트 시 version 2 래스터 그림을 전파한다 (REQ-COMPAT-003)", () => {
     const onChange = vi.fn();
     render(<DrawingCanvas width={300} height={200} onChange={onChange} />);
-    const canvas = screen.getByLabelText("물고기 그리기 캔버스");
-
-    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10 });
-    fireEvent.pointerMove(canvas, { clientX: 80, clientY: 60 });
-    fireEvent.pointerUp(canvas, { clientX: 80, clientY: 60 });
-
     expect(onChange).toHaveBeenCalled();
-    const last = onChange.mock.calls.at(-1)[0];
-    expect(last.version).toBe(1);
-    expect(last.strokes).toHaveLength(1);
-    expect(last.strokes[0].points.length).toBeGreaterThanOrEqual(2);
+    const d = onChange.mock.calls.at(-1)[0];
+    expect(d.version).toBe(2);
+    expect(d.kind).toBe("raster");
+    expect(d.width).toBe(300);
+    expect(d.height).toBe(200);
+    expect(typeof d.image).toBe("string");
   });
 
-  it("초기화 버튼은 스트로크를 모두 지운다", () => {
+  it("포인터로 그리면 onChange 를 다시 호출하고 비어있지 않음을 알린다", () => {
     const onChange = vi.fn();
-    render(<DrawingCanvas onChange={onChange} />);
+    const onEmptyChange = vi.fn();
+    render(
+      <DrawingCanvas
+        width={300}
+        height={200}
+        onChange={onChange}
+        onEmptyChange={onEmptyChange}
+      />,
+    );
     const canvas = screen.getByLabelText("물고기 그리기 캔버스");
+
+    expect(onEmptyChange).toHaveBeenLastCalledWith(true); // 초기엔 빈 캔버스
 
     fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10 });
     fireEvent.pointerMove(canvas, { clientX: 80, clientY: 60 });
     fireEvent.pointerUp(canvas, { clientX: 80, clientY: 60 });
+
+    const d = onChange.mock.calls.at(-1)[0];
+    expect(d.version).toBe(2);
+    expect(onEmptyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("초기화 버튼은 다시 빈 상태로 알린다", () => {
+    const onEmptyChange = vi.fn();
+    render(<DrawingCanvas onEmptyChange={onEmptyChange} />);
+    const canvas = screen.getByLabelText("물고기 그리기 캔버스");
+
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(canvas, { clientX: 10, clientY: 10 });
+    expect(onEmptyChange).toHaveBeenLastCalledWith(false);
 
     fireEvent.click(screen.getByRole("button", { name: "초기화" }));
-    const last = onChange.mock.calls.at(-1)[0];
-    expect(last.strokes).toHaveLength(0);
+    expect(onEmptyChange).toHaveBeenLastCalledWith(true);
+  });
+});
+
+describe("DrawingCanvas — 도구 토글", () => {
+  it("페인트통 버튼은 눌림 상태(aria-pressed)를 토글한다", () => {
+    render(<DrawingCanvas />);
+    const bucket = screen.getByRole("button", { name: "페인트통" });
+    expect(bucket).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(bucket);
+    expect(bucket).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(bucket);
+    expect(bucket).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("실행 취소 버튼은 마지막 스트로크를 제거한다", () => {
-    const onChange = vi.fn();
-    render(<DrawingCanvas onChange={onChange} />);
-    const canvas = screen.getByLabelText("물고기 그리기 캔버스");
-
-    // 첫 번째 스트로크
-    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10 });
-    fireEvent.pointerMove(canvas, { clientX: 80, clientY: 60 });
-    fireEvent.pointerUp(canvas, { clientX: 80, clientY: 60 });
-    // 두 번째 스트로크
-    fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100 });
-    fireEvent.pointerMove(canvas, { clientX: 150, clientY: 150 });
-    fireEvent.pointerUp(canvas, { clientX: 150, clientY: 150 });
-
-    fireEvent.click(screen.getByRole("button", { name: "실행 취소" }));
-    const last = onChange.mock.calls.at(-1)[0];
-    expect(last.strokes).toHaveLength(1);
+  it("지우개와 페인트통은 상호 배타적으로 선택된다", () => {
+    render(<DrawingCanvas />);
+    const bucket = screen.getByRole("button", { name: "페인트통" });
+    const eraser = screen.getByRole("button", { name: "지우개" });
+    fireEvent.click(eraser);
+    expect(eraser).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(bucket);
+    expect(bucket).toHaveAttribute("aria-pressed", "true");
+    expect(eraser).toHaveAttribute("aria-pressed", "false");
   });
+});
 
-  it("꼬리 위치 슬라이더로 tailFraction 을 조정한다(캔버스와 분리)", () => {
+describe("DrawingCanvas — 가이드 슬라이더 (REQ-ANIM-004)", () => {
+  it("꼬리 위치 슬라이더로 tailFraction 을 조정한다", () => {
     const onChange = vi.fn();
     render(<DrawingCanvas width={300} height={200} onChange={onChange} />);
-
     fireEvent.change(screen.getByLabelText("꼬리 위치"), { target: { value: "20" } });
-
-    const last = onChange.mock.calls.at(-1)[0];
-    expect(last.tailFraction).toBeCloseTo(0.2);
-    expect(last.strokes).toHaveLength(0); // 슬라이더 조정은 그리기가 아니다
+    const d = onChange.mock.calls.at(-1)[0];
+    expect(d.tailFraction).toBeCloseTo(0.2);
   });
 
   it("입 위치 슬라이더로 mouthFraction 을 조정한다", () => {
     const onChange = vi.fn();
     render(<DrawingCanvas width={300} height={200} onChange={onChange} />);
-
     fireEvent.change(screen.getByLabelText("입 위치"), { target: { value: "83" } });
-
-    const last = onChange.mock.calls.at(-1)[0];
-    expect(last.mouthFraction).toBeCloseTo(0.83);
-    expect(last.strokes).toHaveLength(0);
-  });
-
-  it("캔버스 포인터 입력은 이제 가이드와 무관하게 항상 그리기로만 동작한다", () => {
-    const onChange = vi.fn();
-    render(<DrawingCanvas width={300} height={200} onChange={onChange} />);
-    const canvas = screen.getByLabelText("물고기 그리기 캔버스");
-
-    // 예전 꼬리선 위치(x=120) 위에서 눌러도 드래그가 아니라 획이 그려져야 한다.
-    fireEvent.pointerDown(canvas, { clientX: 120, clientY: 100 });
-    fireEvent.pointerMove(canvas, { clientX: 160, clientY: 130 });
-    fireEvent.pointerUp(canvas, { clientX: 160, clientY: 130 });
-
-    const last = onChange.mock.calls.at(-1)[0];
-    expect(last.strokes).toHaveLength(1);
+    const d = onChange.mock.calls.at(-1)[0];
+    expect(d.mouthFraction).toBeCloseTo(0.83);
   });
 });

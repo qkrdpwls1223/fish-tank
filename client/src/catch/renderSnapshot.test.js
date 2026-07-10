@@ -76,4 +76,40 @@ describe("drawSnapshot", () => {
     expect(ctx.stroke).toHaveBeenCalledTimes(1);
     expect(ctx.strokeStyle).toBe("#c0392b");
   });
+
+  it("래스터(version 2) 그림도 처리한다 — 획 렌더 경로를 타지 않고 안전하다", () => {
+    const ctx = {
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      stroke: vi.fn(),
+    };
+    const canvas = { getContext: () => ctx };
+    const raster = {
+      version: 2,
+      kind: "raster",
+      width: 100,
+      height: 60,
+      tailFraction: 0.4,
+      mouthFraction: 0.72,
+      image: "data:image/png;base64,AAAA",
+    };
+    // 이미지 디코드는 비동기(onload)라 동기 시점엔 획/그리기가 일어나지 않는다. 던지지만 않으면 된다.
+    expect(() => drawSnapshot(canvas, raster, { width: 80, height: 80 })).not.toThrow();
+    expect(ctx.beginPath).not.toHaveBeenCalled();
+    expect(ctx.stroke).not.toHaveBeenCalled();
+  });
+
+  it("래스터 그림이지만 이미지 문자열이 없으면 무동작(방어)", () => {
+    const ctx = { clearRect: vi.fn(), drawImage: vi.fn() };
+    const canvas = { getContext: () => ctx };
+    expect(() =>
+      drawSnapshot(canvas, { version: 2, kind: "raster", width: 10, height: 10 }, {
+        width: 40,
+        height: 40,
+      }),
+    ).not.toThrow();
+    expect(ctx.drawImage).not.toHaveBeenCalled();
+  });
 });

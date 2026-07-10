@@ -12,12 +12,9 @@ import { nextScale, canScaleUp, canScaleDown } from "./scale.js";
 import { spawnSprite, stepSprites, applySeparation, applySchooling } from "../tank/tankModel.js";
 import { fishInfo } from "../tank/fishInfo.js";
 import { colors } from "../theme/colors.js";
-import { TAIL_FOLD_FRACTION } from "../drawing/drawingModel.js";
+// 렌더 캐싱/애니메이션은 어항과 동일한 공용 모듈을 쓴다(SPEC-RASTER-001 M3, DRY).
+import { createSpriteCache, drawFishBitmap } from "../drawing/fishSprite.js";
 
-// 물고기 렌더 크기(어항과 동일 축소 비율)와 꼬리 흔들림 파라미터.
-const SPRITE_SCALE = 0.3;
-const TAIL_MAX_ANGLE = 0.5;
-const TAIL_SPEED = 7;
 // 캔버스 드래그 히트테스트에서 물고기로 인정하는 반경(px, 화면 좌표계).
 const FISH_HIT_RADIUS = 46;
 // 키보드 방향키 한 번에 이동하는 거리(px). 접근성 이동 수단(NFR-A11Y-001).
@@ -82,6 +79,7 @@ export default function MyTank({
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const spritesRef = useRef(new Map()); // id → 헤엄치는 스프라이트(프레임 간 유지)
+  const spriteCacheRef = useRef(createSpriteCache()); // id → 오프스크린 비트맵 캐시(어항과 동일, REQ-RENDER-003)
   const decorRef = useRef([]); // rAF 루프가 최신 장식을 리렌더 없이 읽도록 미러링
   const boundsRef = useRef({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT });
   const draggingRef = useRef(null); // { type, id } 드래그 중인 항목
@@ -162,6 +160,8 @@ export default function MyTank({
     for (const id of map.keys()) {
       if (!ids.has(id)) map.delete(id);
     }
+    // 사라진 물고기의 비트맵 캐시를 축출한다(REQ-RENDER-002).
+    spriteCacheRef.current.prune(ids);
   }, [fish]);
 
   // 헤엄 애니메이션 루프(어항과 동일 방식 재사용). rAF/2D 미지원 환경(jsdom)에서는 조용히 건너뛴다.
@@ -181,7 +181,7 @@ export default function MyTank({
       const flocked = applySeparation(applySchooling(moving, dt), dt);
       const stepped = stepSprites(flocked, dt, bounds);
       for (const s of stepped) map.set(s.id, s);
-      drawMyTank(canvasRef.current, [...map.values()], decorRef.current, bounds, now);
+      drawMyTank(canvasRef.current, [...map.values()], decorRef.current, bounds, now, spriteCacheRef.current);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -640,7 +640,7 @@ function hitTest(x, y, decorList, spriteMap) {
 }
 
 // 캔버스에 장식(정적) → 물고기(헤엄)를 순서대로 그린다. 2D 미지원(jsdom)이면 무시.
-function drawMyTank(canvas, sprites, decorList, bounds, now) {
+function drawMyTank(canvas, sprites, decorList, bounds, now, cache = null) {
   if (!canvas) return;
   let ctx = null;
   try {
@@ -651,53 +651,15 @@ function drawMyTank(canvas, sprites, decorList, bounds, now) {
   if (!ctx) return;
   ctx.clearRect(0, 0, bounds.width, bounds.height);
   for (const item of decorList) drawDecor(ctx, item);
-  for (const s of sprites) drawFish(ctx, s, now);
+  for (const s of sprites) drawFish(ctx, s, now, cache);
 }
 
-// 손그림 물고기를 스프라이트 위치에 방향(facing)·축소·꼬리 파닥임을 적용해 그린다(어항과 동일 접근).
-function drawFish(ctx, sprite, now) {
-  const { drawing } = sprite;
-  if (!drawing || !Array.isArray(drawing.strokes)) return;
-  const w = drawing.width || 300;
-  const h = drawing.height || 200;
-  const foldX = w * (drawing.tailFraction ?? TAIL_FOLD_FRACTION);
-  const pivotY = h / 2;
-  const t = (typeof now === "number" ? now : 0) / 1000;
-  const wave = Math.sin(t * TAIL_SPEED) * TAIL_MAX_ANGLE;
-
-  // 저장된 개별 크기를 어항 공통 축소 비율에 곱한다(scale 없으면 1.0 = 기존 동작).
+// 물고기를 스프라이트 위치에 방향·축소(+개별 scale)·꼬리 파닥임을 적용해 그린다(어항과 동일 공용 blit).
+// 벡터/래스터 모두 오프스크린 캐시 비트맵을 blit 한다. 저장된 개별 크기(scale)를 배수로 넘긴다.
+function drawFish(ctx, sprite, now, cache) {
+  if (!cache) return;
+  const entry = cache.getEntry(sprite);
+  if (!entry) return;
   const itemScale = typeof sprite.scale === "number" ? sprite.scale : 1;
-  ctx.save();
-  ctx.translate(sprite.x, sprite.y);
-  ctx.scale(sprite.facing * SPRITE_SCALE * itemScale, SPRITE_SCALE * itemScale);
-  ctx.translate(-w / 2, -h / 2);
-  for (const stroke of drawing.strokes) {
-    if (!stroke.points || stroke.points.length === 0) continue;
-    ctx.beginPath();
-    ctx.strokeStyle = stroke.color;
-    ctx.lineWidth = stroke.width;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    const p0 = bendTail(stroke.points[0], foldX, pivotY, wave);
-    ctx.moveTo(p0.x, p0.y);
-    for (let i = 1; i < stroke.points.length; i += 1) {
-      const p = bendTail(stroke.points[i], foldX, pivotY, wave);
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-// 접힘선(foldX) 왼쪽(꼬리)만 피벗 기준으로 회전시켜 파닥이게 한다.
-function bendTail(p, foldX, pivotY, wave) {
-  if (p.x >= foldX) return p;
-  const factor = Math.min(1, (foldX - p.x) / foldX);
-  const angle = wave * factor;
-  const dx = p.x - foldX;
-  const dy = p.y - pivotY;
-  return {
-    x: foldX + dx * Math.cos(angle) - dy * Math.sin(angle),
-    y: pivotY + dx * Math.sin(angle) + dy * Math.cos(angle),
-  };
+  drawFishBitmap(ctx, entry, sprite, now, itemScale);
 }

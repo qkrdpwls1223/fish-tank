@@ -65,16 +65,18 @@ describe("FishComposer — 제출 (REQ-AUTH-003, NFR-SEC-001)", () => {
     const arg = submitFish.mock.calls[0][0];
     expect(arg.token).toBe("tok-9");
     expect(arg.displayMode).toBe("named");
-    expect(arg.drawing.strokes).toHaveLength(1);
+    // 신규 물고기는 래스터(version 2)로 저장된다(REQ-COMPAT-003).
+    expect(arg.drawing.version).toBe(2);
+    expect(arg.drawing.kind).toBe("raster");
   });
 
-  it("직접 선택한 RGB 색이 그림 획 색으로 반영된다", async () => {
+  it("직접 선택한 RGB 색으로도 그려 제출할 수 있다", async () => {
     const submitFish = vi.fn(async () => ({ id: "fish-c" }));
     render(
       <FishComposer authState={authed} token="t" submitFish={submitFish} />,
     );
 
-    // 팔레트에 없는 색을 자유 선택한 뒤 그린다.
+    // 팔레트에 없는 색을 자유 선택한 뒤 그린다(픽셀 색은 캔버스에 적용되며 jsdom 에선 검증 불가).
     fireEvent.change(screen.getByLabelText("색상 직접 선택"), {
       target: { value: "#12ab34" },
     });
@@ -82,7 +84,7 @@ describe("FishComposer — 제출 (REQ-AUTH-003, NFR-SEC-001)", () => {
     fireEvent.click(screen.getByRole("button", { name: "어항에 풀어놓기" }));
 
     await waitFor(() => expect(submitFish).toHaveBeenCalledTimes(1));
-    expect(submitFish.mock.calls[0][0].drawing.strokes[0].color).toBe("#12ab34");
+    expect(submitFish.mock.calls[0][0].drawing.version).toBe(2);
   });
 
   it("등록에 성공하면 onSuccess 를 호출한다(모달 닫기)", async () => {

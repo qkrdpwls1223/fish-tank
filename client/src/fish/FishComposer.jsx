@@ -68,6 +68,9 @@ export default function FishComposer({
   onSuccess,
 }) {
   const [drawing, setDrawing] = useState(null);
+  // 래스터 캔버스는 빈 상태(전부 투명)도 유효한 PNG 라 validateDrawing 으로는 감지되지 않는다.
+  // DrawingCanvas 가 비어있음을 별도로 알려주면 제출을 막는다(빈 물고기 방지).
+  const [canvasEmpty, setCanvasEmpty] = useState(true);
   const [displayMode, setDisplayMode] = useState("named");
   const [message, setMessage] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -81,6 +84,13 @@ export default function FishComposer({
 
   async function handleSubmit() {
     setMessage(null);
+
+    // 빈 캔버스(전부 투명)는 제출을 막는다 — 래스터 PNG 는 비어 있어도 형식상 유효하므로
+    // validateDrawing 이전에 별도 게이트로 확인한다.
+    if (canvasEmpty) {
+      setMessage(messageForReason("empty"));
+      return;
+    }
 
     // 클라이언트 사전 검증(서버가 최종 권한, NFR-SEC-003).
     const { valid, reason } = validateDrawing(drawing ?? {});
@@ -136,6 +146,7 @@ export default function FishComposer({
         color={color}
         strokeWidth={brushWidth}
         onChange={handleChange}
+        onEmptyChange={setCanvasEmpty}
       >
         {/* 색상: 기본 팔레트 + 직접 선택(자유 RGB 피커) */}
         <p style={fieldLabelStyle}>색상</p>

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { validateDrawing, DRAWING_LIMITS } from "./validateDrawing.js";
+import {
+  validateDrawing,
+  DRAWING_LIMITS,
+  RASTER_LIMITS,
+} from "./validateDrawing.js";
 
 // 그림 데이터 서버측 검증 (NFR-SEC-003, REQ-DRAW-004).
 // 직렬화 포맷: 스트로크 기반 벡터.
@@ -254,5 +258,144 @@ describe("validateDrawing — 가이드 선(꼬리/입) 위치 (사용자 지정
     expect(
       validateDrawing(validDrawing({ tailFraction: 0.3, mouthFraction: "0.7" })).reason,
     ).toBe("invalid_format");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 래스터(비트맵) 포맷 검증 — version 2 (SPEC-RASTER-001 M1)
+//   { version:2, kind:"raster", width, height, tailFraction?, mouthFraction?, image:"<data URL>" }
+//   서버는 이미지를 재인코드하지 않고 형식(data URL 접두)·매직바이트·크기만 독립 검증한다.
+// ---------------------------------------------------------------------------
+
+// 매직바이트(파일 시그니처) 상수.
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG_MAGIC = [0xff, 0xd8, 0xff, 0xe0];
+// WebP: "RIFF"(4) + 파일크기(4) + "WEBP"(4)
+const WEBP_MAGIC = [
+  0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+];
+
+// 바이트 배열 → base64 문자열.
+function b64(bytes) {
+  return Buffer.from(bytes).toString("base64");
+}
+
+// 매직바이트 + 더미 본문으로 이루어진 data URL 을 만든다.
+function imageDataUrl(mime, magic, padBytes = 40) {
+  const body = new Array(padBytes).fill(0x20);
+  return `data:image/${mime};base64,` + b64([...magic, ...body]);
+}
+
+// 유효한 최소 래스터 그림 헬퍼.
+function validRaster(overrides = {}) {
+  return {
+    version: 2,
+    kind: "raster",
+    width: 300,
+    height: 200,
+    image: imageDataUrl("png", PNG_MAGIC),
+    ...overrides,
+  };
+}
+
+describe("validateDrawing — 래스터 정상 케이스 (REQ-RAS-001, AC-002)", () => {
+  it("올바른 PNG 래스터 그림을 통과시킨다", () => {
+    expect(validateDrawing(validRaster())).toEqual({ valid: true, reason: null });
+  });
+
+  it("올바른 JPEG 래스터 그림을 통과시킨다", () => {
+    expect(
+      validateDrawing(validRaster({ image: imageDataUrl("jpeg", JPEG_MAGIC) })).valid,
+    ).toBe(true);
+  });
+
+  it("올바른 WebP 래스터 그림을 통과시킨다", () => {
+    expect(
+      validateDrawing(validRaster({ image: imageDataUrl("webp", WEBP_MAGIC) })).valid,
+    ).toBe(true);
+  });
+
+  it("래스터에서도 유효한 꼬리/입 가이드를 통과시킨다 (REQ-ANIM-004)", () => {
+    expect(
+      validateDrawing(validRaster({ tailFraction: 0.4, mouthFraction: 0.72 })).valid,
+    ).toBe(true);
+  });
+});
+
+describe("validateDrawing — 벡터 비회귀 (REQ-COMPAT-002, AC-001)", () => {
+  it("래스터 분기 추가 후에도 version 1 벡터 그림이 그대로 통과한다", () => {
+    expect(validateDrawing(validDrawing())).toEqual({ valid: true, reason: null });
+  });
+});
+
+describe("validateDrawing — 래스터 보안 검증 (NFR-SEC-002/003, AC-010)", () => {
+  it("MIME 과 매직바이트가 불일치(위장)하면 invalid_format 으로 거부한다", () => {
+    // png 로 선언했지만 실제 바이트는 JPEG 시그니처.
+    const spoof = validRaster({
+      image: `data:image/png;base64,` + b64([...JPEG_MAGIC, 0x20, 0x20, 0x20, 0x20]),
+    });
+    expect(validateDrawing(spoof).reason).toBe("invalid_format");
+  });
+
+  it("이미지가 아닌 data URL(text/html 등)을 invalid_format 으로 거부한다", () => {
+    const html = validRaster({
+      image: `data:text/html;base64,` + b64([0x3c, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74]),
+    });
+    expect(validateDrawing(html).reason).toBe("invalid_format");
+  });
+
+  it("data URL 접두가 없는 문자열/스크립트 주입을 invalid_format 으로 거부한다", () => {
+    expect(validateDrawing(validRaster({ image: "javascript:alert(1)" })).reason).toBe(
+      "invalid_format",
+    );
+  });
+
+  it("base64 가 유효하지 않으면 invalid_format 으로 거부한다", () => {
+    expect(
+      validateDrawing(validRaster({ image: "data:image/png;base64,!!!not-b64!!!" }))
+        .reason,
+    ).toBe("invalid_format");
+  });
+
+  it("빈 페이로드를 invalid_format 으로 거부한다", () => {
+    expect(validateDrawing(validRaster({ image: "data:image/png;base64," })).reason).toBe(
+      "invalid_format",
+    );
+  });
+});
+
+describe("validateDrawing — 래스터 구조/크기 검증 (NFR-STORAGE-001, REQ-RAS-004)", () => {
+  it("kind 가 raster 가 아니면 invalid_format 으로 거부한다", () => {
+    expect(validateDrawing(validRaster({ kind: "vector" })).reason).toBe(
+      "invalid_format",
+    );
+  });
+
+  it("image 필드가 없으면 invalid_format 으로 거부한다", () => {
+    const noImage = validRaster();
+    delete noImage.image;
+    expect(validateDrawing(noImage).reason).toBe("invalid_format");
+  });
+
+  it("해상도가 상한(maxCanvas)을 넘으면 invalid_format 으로 거부한다", () => {
+    expect(
+      validateDrawing(validRaster({ width: RASTER_LIMITS.maxCanvas + 1 })).reason,
+    ).toBe("invalid_format");
+    expect(validateDrawing(validRaster({ height: 0 })).reason).toBe("invalid_format");
+  });
+
+  it("가이드가 하나만 지정되면 invalid_format 으로 거부한다", () => {
+    expect(validateDrawing(validRaster({ tailFraction: 0.4 })).reason).toBe(
+      "invalid_format",
+    );
+  });
+
+  it("직렬화 크기가 래스터 상한을 넘으면 too_large 로 거부한다", () => {
+    // 매직바이트는 유효하되 본문을 크게 만들어 크기 상한만 초과시킨다.
+    const bigBody = new Array(1100 * 1024).fill(0x20);
+    const bigImage = `data:image/png;base64,` + b64([...PNG_MAGIC, ...bigBody]);
+    const res = validateDrawing(validRaster({ image: bigImage }));
+    expect(res.valid).toBe(false);
+    expect(res.reason).toBe("too_large");
   });
 });
