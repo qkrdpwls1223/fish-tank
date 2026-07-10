@@ -68,6 +68,23 @@ describe("FishComposer — 제출 (REQ-AUTH-003, NFR-SEC-001)", () => {
     expect(arg.drawing.strokes).toHaveLength(1);
   });
 
+  it("직접 선택한 RGB 색이 그림 획 색으로 반영된다", async () => {
+    const submitFish = vi.fn(async () => ({ id: "fish-c" }));
+    render(
+      <FishComposer authState={authed} token="t" submitFish={submitFish} />,
+    );
+
+    // 팔레트에 없는 색을 자유 선택한 뒤 그린다.
+    fireEvent.change(screen.getByLabelText("색상 직접 선택"), {
+      target: { value: "#12ab34" },
+    });
+    drawFish();
+    fireEvent.click(screen.getByRole("button", { name: "어항에 풀어놓기" }));
+
+    await waitFor(() => expect(submitFish).toHaveBeenCalledTimes(1));
+    expect(submitFish.mock.calls[0][0].drawing.strokes[0].color).toBe("#12ab34");
+  });
+
   it("등록에 성공하면 onSuccess 를 호출한다(모달 닫기)", async () => {
     const submitFish = vi.fn(async () => ({ id: "fish-1" }));
     const onSuccess = vi.fn();

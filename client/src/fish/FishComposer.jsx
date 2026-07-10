@@ -75,6 +75,8 @@ export default function FishComposer({
   const [brushWidth, setBrushWidth] = useState(8);
 
   const writeEnabled = canWrite(authState);
+  // 현재 색이 기본 팔레트에 없으면 "직접 선택" 중으로 본다(스와치 강조 표시용).
+  const customColor = !PALETTE.some((c) => c.value === color);
   const handleChange = useCallback((d) => setDrawing(d), []);
 
   async function handleSubmit() {
@@ -135,38 +137,80 @@ export default function FishComposer({
         strokeWidth={brushWidth}
         onChange={handleChange}
       >
-        {/* 색상 팔레트 */}
+        {/* 색상: 기본 팔레트 + 직접 선택(자유 RGB 피커) */}
         <p style={fieldLabelStyle}>색상</p>
-        <div
-          role="radiogroup"
-          aria-label="색상"
-          style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
-        >
-          {PALETTE.map((c) => {
-            const selected = color === c.value;
-            return (
-              <button
-                key={c.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                aria-label={c.name}
-                onClick={() => setColor(c.value)}
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: "50%",
-                  background: c.value,
-                  cursor: "pointer",
-                  border:
-                    c.value === "#ffffff" ? "1.5px solid #dbe3e8" : "1.5px solid transparent",
-                  outline: selected ? `2.5px solid ${TEAL}` : "none",
-                  outlineOffset: 2,
-                  padding: 0,
-                }}
-              />
-            );
-          })}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div
+            role="radiogroup"
+            aria-label="색상"
+            style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+          >
+            {PALETTE.map((c) => {
+              const selected = color === c.value;
+              return (
+                <button
+                  key={c.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  aria-label={c.name}
+                  onClick={() => setColor(c.value)}
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: "50%",
+                    background: c.value,
+                    cursor: "pointer",
+                    border:
+                      c.value === "#ffffff" ? "1.5px solid #dbe3e8" : "1.5px solid transparent",
+                    outline: selected ? `2.5px solid ${TEAL}` : "none",
+                    outlineOffset: 2,
+                    padding: 0,
+                  }}
+                />
+              );
+            })}
+          </div>
+          {/* 직접 선택: 네모난 RGB 색상 피커(OS 기본). 팔레트에 없는 색도 자유롭게 고른다.
+              팔레트에 없는 색을 고르면 무지개 테두리로 "직접 선택 중"임을 표시한다. */}
+          <label
+            title="색상 직접 선택"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 32,
+              height: 32,
+              borderRadius: "50%",
+              cursor: "pointer",
+              overflow: "hidden",
+              padding: 0,
+              // 자유 선택 중이면 그 색을, 기본이면 무지개(자유 선택 유도)를 스와치에 보인다.
+              background: customColor
+                ? color
+                : "conic-gradient(red, orange, yellow, lime, aqua, blue, magenta, red)",
+              border: "1.5px solid #dbe3e8",
+              outline: customColor ? `2.5px solid ${TEAL}` : "none",
+              outlineOffset: 2,
+            }}
+          >
+            <span style={srOnly}>색상 직접 선택</span>
+            <input
+              type="color"
+              aria-label="색상 직접 선택"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              style={{
+                width: 46,
+                height: 46,
+                border: "none",
+                padding: 0,
+                background: "transparent",
+                cursor: "pointer",
+                opacity: 0,
+              }}
+            />
+          </label>
         </div>
 
         {/* 브러쉬 굵기 */}
