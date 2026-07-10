@@ -8,6 +8,11 @@ import { acquireMsalToken } from "./auth/msalAuth.js";
 import FishComposer from "./fish/FishComposer.jsx";
 import FishTank from "./tank/FishTank.jsx";
 import MyCollection from "./catch/MyCollection.jsx";
+import MyTank from "./mytank/MyTank.jsx";
+import { createMyTankFish as createMyTankFishApi } from "./mytank/myTankApi.js";
+
+// 내 어항에 물고기를 그려 넣을 때의 기본 배치 위치(px). 넣은 뒤 드래그/방향키로 옮길 수 있다.
+const DEFAULT_FISH_POS = { x: 300, y: 180 };
 
 // 기본 인증 함수: Microsoft SSO(MSAL) 토큰을 획득하고 백엔드에서 신원을 검증받는다.
 // 테스트에서는 authenticate prop 을 주입해 이 경로를 대체한다. (REQ-AUTH-001/002)
@@ -45,13 +50,20 @@ export default function App({
   authenticate = defaultAuthenticate,
   tankProps = {},
   collectionProps = {},
+  myTankProps = {},
+  // 공유 어항 그리기 제출(미지정 시 FishComposer 기본=공유 /api/fish). 테스트 주입용.
+  submitFish,
+  // 내 어항 그리기 제출용 API(테스트 주입). 기본은 POST /api/my-tank/fish.
+  createMyTankFish = createMyTankFishApi,
 }) {
   const [state, dispatch] = useReducer(authReducer, initialAuthState);
   // 쓰기 제출용 토큰(신원과 별도로 보관, 인증 머신은 변경하지 않음).
   const [token, setToken] = useState(null);
   const [composing, setComposing] = useState(false);
-  // 상위 뷰 전환: 공유 어항(tank, 기본) ↔ 내 수집함(collection) (REQ-COLL-002).
+  // 상위 뷰 전환(3탭): 공유 어항(tank, 기본) / 내 수집함(collection) / 내 어항(mytank).
   const [view, setView] = useState("tank");
+  // 내 어항 뷰가 마운트된 채 물고기를 새로 넣으면 재로드해야 하므로, 이 카운터를 key 로 써서 재마운트한다.
+  const [myTankRefresh, setMyTankRefresh] = useState(0);
 
   // 인증 시도(최초 마운트 + 재시도 공용). REQ-AUTH-001.
   const runAuth = useCallback(async () => {
@@ -79,6 +91,30 @@ export default function App({
 
   const writeEnabled = canWrite(state);
 
+  // 내 어항용 제출 래퍼: FishComposer 는 { token, drawing, displayMode } 만 넘기므로 기본 위치를 더해
+  // POST /api/my-tank/fish 로 보낸다. [PRIVACY] 내 어항에서 그린 물고기는 오직 이 경로로만 저장되어
+  // 공유 어항(POST /api/fish)에는 절대 나타나지 않는다.
+  const submitToMyTank = useCallback(
+    ({ token: t, drawing, displayMode }) =>
+      createMyTankFish({
+        token: t,
+        drawing,
+        displayMode,
+        x: DEFAULT_FISH_POS.x,
+        y: DEFAULT_FISH_POS.y,
+      }),
+    [createMyTankFish],
+  );
+
+  // 현재 뷰에 맞는 그리기 제출 함수. 내 어항이면 my-tank 경로, 그 외(공유 어항)는 기본/주입값.
+  const composerSubmit = view === "mytank" ? submitToMyTank : submitFish;
+
+  // 그리기 성공 시 모달을 닫고, 내 어항 뷰였다면 재마운트해 방금 넣은 물고기를 다시 로드한다.
+  const handleComposerSuccess = useCallback(() => {
+    setComposing(false);
+    if (view === "mytank") setMyTankRefresh((n) => n + 1);
+  }, [view]);
+
   return (
     <main
       style={{
@@ -98,6 +134,11 @@ export default function App({
         <MyCollection token={token} {...collectionProps} />
       )}
 
+      {/* 내 어항: 본인만 보는 개인 어항. 방금 넣은 물고기 반영을 위해 refresh 카운터를 key 로 재마운트한다. */}
+      {state.status === "authenticated" && view === "mytank" && (
+        <MyTank key={`mytank-${myTankRefresh}`} token={token} {...myTankProps} />
+      )}
+
       {/* 상단 우측: 뷰 전환(공유 어항 ↔ 내 수집함). 실제 버튼이라 키보드 조작 가능(NFR-A11Y-001). */}
       {state.status === "authenticated" && (
         <div
@@ -115,6 +156,7 @@ export default function App({
           {[
             { key: "tank", label: "공유 어항" },
             { key: "collection", label: "내 수집함" },
+            { key: "mytank", label: "내 어항" },
           ].map((v) => {
             const active = view === v.key;
             return (
@@ -196,9 +238,9 @@ export default function App({
         </div>
       )}
 
-      {/* 하단 중앙: 물고기 그리기 플로팅 버튼 (어항 뷰에서만 노출, 미인증 시 비활성 — REQ-AUTH-004).
-          수집함 뷰에서는 그리기가 맥락에 맞지 않아 숨긴다(기존 어항 뷰 동작은 그대로 유지). */}
-      {view === "tank" && (
+      {/* 하단 좌측: 물고기 그리기 플로팅 버튼 (공유 어항·내 어항 뷰에서 노출, 미인증 시 비활성 — REQ-AUTH-004).
+          공유 어항에서는 공유 물고기로, 내 어항에서는 내 어항 전용으로 저장된다(수집함 뷰에서는 숨김). */}
+      {(view === "tank" || view === "mytank") && (
       <div
         style={{
           position: "absolute",
@@ -285,7 +327,8 @@ export default function App({
             <FishComposer
               authState={state}
               token={token}
-              onSuccess={() => setComposing(false)}
+              submitFish={composerSubmit}
+              onSuccess={handleComposerSuccess}
             />
           </div>
         </div>

@@ -10,6 +10,7 @@ import { resolveVerifier } from "./auth/devAuth.js";
 import { createPoolFromEnv } from "./db/pool.js";
 import { PgFishRepository } from "./fish/pgFishRepository.js";
 import { PgCatchRepository } from "./catch/pgCatchRepository.js";
+import { PgMyTankRepository } from "./mytank/pgMyTankRepository.js";
 import { InMemoryBroadcaster } from "./realtime/broadcaster.js";
 import { attachRealtime } from "./realtime/wsGateway.js";
 
@@ -30,6 +31,8 @@ const pool = createPoolFromEnv(process.env);
 const fishRepository = new PgFishRepository(pool);
 // 개인 수집함 저장소 (SPEC-CATCH-001, REQ-SNAP-001). 같은 풀을 재사용한다.
 const catchRepository = new PgCatchRepository(pool);
+// 내 어항(개인 어항) 저장소. 같은 풀을 재사용한다. 소유자 전용·공유 어항과 격리.
+const myTankRepository = new PgMyTankRepository(pool);
 // 실시간 브로드캐스터를 앱과 WS 게이트웨이가 공유한다 (REQ-RT-001/002).
 // 낚시/수집함은 이 브로드캐스터를 사용하지 않는다 — 완전 비공개(REQ-PRIV-002).
 const broadcaster = new InMemoryBroadcaster();
@@ -37,6 +40,7 @@ const app = createApp({
   verify,
   fishRepository,
   catchRepository,
+  myTankRepository,
   broadcaster,
   staticDir: serveStatic ? staticDir : undefined,
 });
