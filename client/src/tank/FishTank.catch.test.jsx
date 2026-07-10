@@ -281,6 +281,77 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     expect(catchFish).toHaveBeenCalledWith({ token: "tok-abc", id: "z" });
   });
 
+  it("스페이스바로 던지고, 본신에서 스페이스바로 즉시 챔질한다 (NFR-A11Y-001)", async () => {
+    const { catchFish } = await renderGame({
+      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+    });
+
+    // 대기(idle) 중 스페이스바 → 던지기.
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    await advance(0);
+    expect(castBtn()).toBeDisabled(); // 던져져서 비활성
+    expect(region()).toHaveTextContent("낚싯대를 던졌어요");
+
+    await advanceToStrike(); // 입질(본신)까지 진행
+    expect(reelBtn()).toBeEnabled();
+
+    // 본신 중 스페이스바 → 즉시 챔질.
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    await advance(0);
+    expect(catchFish).toHaveBeenCalledWith({ token: "tok-abc", id: "a" });
+    expect(region()).toHaveTextContent("잡았다! 수집함에 담겼어요");
+  });
+
+  it("입력 요소(input)에 포커스면 스페이스바를 무시한다(게임 조작 가로채지 않음)", async () => {
+    await renderGame();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+
+    fireEvent.keyDown(input, { key: " ", code: "Space" });
+    await advance(0);
+
+    // 입력 중이므로 던지기가 발생하지 않아 버튼은 여전히 활성.
+    expect(castBtn()).toBeEnabled();
+    document.body.removeChild(input);
+  });
+
+  it("예신 단계에서 스페이스바는 헛챔질(무시)이라 도망시키지 않는다 — 본신에서만 챔질", async () => {
+    await renderGame({ positions: [{ id: "a", x: CENTER.x, y: CENTER.y }] });
+
+    fireEvent.click(castBtn());
+    await advance(700); // 예신(nibble) 단계 진입(본신 전)
+    expect(region()).toHaveTextContent("톡톡");
+
+    // 예신 중 스페이스바 → 아무 일도 일어나지 않는다(본신 전이라 챔질 불가).
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    await advance(0);
+    expect(region()).toHaveTextContent("톡톡"); // 여전히 예신
+
+    // 그대로 본신으로 진행되면 챔질 가능해진다.
+    await advance(700);
+    expect(reelBtn()).toBeEnabled();
+  });
+
+  it("반경 안에 머무는 물고기도 상시 재굴림으로 결국 입질한다 — 던져놓고 무반응 방지", async () => {
+    // 초반 굴림(진입/첫 재굴림)은 모두 실패시키고, 이후 재굴림에서 성공하게 한다.
+    let n = 0;
+    await renderGame({
+      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      rng: () => (n++ < 2 ? 0.99 : 0),
+    });
+
+    fireEvent.click(castBtn());
+
+    // 재굴림 주기를 여러 번 흘려보내면 체류 물고기가 결국 입질(본신)까지 온다.
+    let enabled = false;
+    for (let i = 0; i < 25 && !enabled; i += 1) {
+      await advance(200);
+      enabled = !reelBtn().disabled;
+    }
+    expect(enabled).toBe(true); // 상시 입질로 본신 도달 → 건져올리기 활성
+  });
+
   it("fishing 미지정(공유 어항 감상 모드)이면 낚시 UI가 전혀 노출되지 않는다", async () => {
     const { connect } = fakeConnect();
     const loadSnapshot = vi.fn().mockResolvedValue([]);

@@ -13,6 +13,8 @@ import {
   initialGameState,
   fishInZone,
   rollBiter,
+  rollResidentBiter,
+  applyLure,
   BITE_RADIUS,
   BITE_CHANCE,
   IDLE,
@@ -148,6 +150,8 @@ export default function FishTank({
   // 찌 반경 안에 "현재 들어와 있는" 물고기 id 집합. 새로 진입한 물고기만 입질 확률을 굴리기 위해
   // 이전 틱의 집합과 비교한다(같은 물고기를 매 틱 재굴림하지 않도록, BITE_CHANCE).
   const zoneRef = useRef(new Set());
+  // 체류 물고기 상시 재굴림(rollResidentBiter)의 마지막 굴림 시각(ms). 캐스트 밖에서는 null 로 리셋.
+  const residentRollRef = useRef(null);
 
   // OS 다크 모드에 따라 어항 배경 이미지를 전환한다. jsdom 등 matchMedia 미지원 시 라이트 유지.
   useEffect(() => {
@@ -328,16 +332,25 @@ export default function FishTank({
       if (g.phase === CAST) {
         // 찌가 포물선으로 날아가 착수하기 전에는 입질이 없다(연출 후 판정 시작).
         if (Date.now() - (g.castAt ?? 0) < CAST_DROP_MS) return;
-        // 반경 안 물고기 중 "이번에 새로 진입한" 물고기만 확률 굴림한다(진입당 1회, 매 틱 재굴림 아님).
+        const now = Date.now();
+        // 반경 안 물고기 중 "이번에 새로 진입한" 물고기는 진입당 1회 굴린다(BITE_CHANCE).
         const zone = fishInZone(spritePositions(), g.bobber, BITE_RADIUS);
         const fresh = [];
         for (const fid of zone) if (!zoneRef.current.has(fid)) fresh.push(fid);
         zoneRef.current = zone;
-        const biter = rollBiter(fresh, BITE_CHANCE, rng);
-        if (biter) dispatchGame({ type: "BITE", biterId: biter, now: Date.now() });
+        let biter = rollBiter(fresh, BITE_CHANCE, rng);
+        // 진입 굴림에 아무도 안 물었으면, 반경 안에 머무는 물고기를 주기적으로 재굴림한다
+        // (던져놓고 한참 무반응 방지). rolledAt 을 다음 틱의 lastRollAt 으로 넘긴다.
+        if (!biter) {
+          const res = rollResidentBiter(zone, now, residentRollRef.current, undefined, undefined, rng);
+          residentRollRef.current = res.rolledAt;
+          biter = res.biterId;
+        }
+        if (biter) dispatchGame({ type: "BITE", biterId: biter, now });
       } else {
-        // 캐스트 상태가 아니면 진입 이력을 비운다 — 다음 캐스트에서 처음부터 새로 굴리도록.
+        // 캐스트 상태가 아니면 진입 이력과 재굴림 타이머를 비운다 — 다음 캐스트에서 처음부터 새로 굴리도록.
         if (zoneRef.current.size) zoneRef.current = new Set();
+        residentRollRef.current = null;
         // 예신→본신 전이, 본신→도망 전이는 리듀서가 시각을 보고 판단한다.
         if (g.phase === NIBBLE || g.phase === BITING) {
           dispatchGame({ type: "TICK", now: Date.now() });
@@ -346,6 +359,31 @@ export default function FishTank({
     }, GAME_TICK_MS);
     return () => clearInterval(id);
   }, [fishing, spritePositions, rng]);
+
+  // 스페이스바 즉시 조작(NFR-A11Y-001 향상): 대기 중이면 던지고, 본신(챔질 창)이면 즉시 건져올린다.
+  // 버튼으로 커서를 옮기는 지연 없이 "지금!" 타이밍에 바로 챔질할 수 있게 하는 게 핵심.
+  // 낚시 모드(fishing)일 때만 등록/해제한다. 입력 요소 포커스 시에는 무시하고, 스크롤/버튼 더블트리거를
+  // 막기 위해 preventDefault 한다. 기존 던지기/건져올리기 버튼(접근성 경로)은 그대로 유지된다.
+  useEffect(() => {
+    if (!fishing) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key !== " " && e.code !== "Space") return;
+      const el = e.target;
+      const tag = el?.tagName;
+      // 입력 중(텍스트 입력/편집 영역)에는 스페이스가 게임 조작을 가로채지 않게 한다.
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      const phase = gameRef.current.phase;
+      if (phase === IDLE) {
+        e.preventDefault();
+        handleCast();
+      } else if (phase === BITING) {
+        e.preventDefault();
+        handleReel();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fishing, handleCast, handleReel]);
 
   // 단계 전이에 따른 안내(던짐/예신/본신/도망). 건짐 성공 문구는 handleReel 의 API 응답에서 낸다.
   useEffect(() => {
@@ -430,7 +468,18 @@ export default function FishTank({
       foodsRef.current = stepFoods(foodsRef.current, dt, bounds);
       const reacting = reactToFoods([...map.values()], foodsRef.current, dt);
       const flocked = applySeparation(applySchooling(reacting, dt), dt);
-      const stepped = stepSprites(flocked, dt, bounds);
+      // 미끼 유인(낚시 전용): 찌가 물에 착수해 있을 때만 반경 안 물고기를 찌 쪽으로 약하게 끈다.
+      //  - 착수(CAST 낙하 완료) 이후, 예신/본신 단계에서 찌 주변으로 물고기를 모아 무반응을 줄인다.
+      //  - fishing=false(공유/개인 어항 감상)면 game.bobber 가 null 이라 유인은 발생하지 않는다.
+      // 훅에 걸린 물고기는 아래 applyHookedMotion 이 위치를 다시 덮어쓰므로 유인 영향이 없다.
+      const g = gameRef.current;
+      const bobberInWater =
+        g.bobber &&
+        (g.phase === NIBBLE ||
+          g.phase === BITING ||
+          (g.phase === CAST && Date.now() - (g.castAt ?? 0) >= CAST_DROP_MS));
+      const lured = bobberInWater ? applyLure(flocked, g.bobber, dt) : flocked;
+      const stepped = stepSprites(lured, dt, bounds);
       foodsRef.current = consumeFoods(stepped, foodsRef.current);
       for (const s of stepped) map.set(s.id, s);
       // 훅에 걸린 물고기 시각 오버라이드(공유 어항 state.fish 는 불변 — 비파괴 REQ-CATCH-003):
@@ -530,7 +579,7 @@ export default function FishTank({
         헤엄치는 물고기 그림입니다. 목록에서 각 물고기를 선택해 정보를 보거나,
         본인 물고기를 삭제하고, 먹이 주기 버튼으로 먹이를 줄 수 있어요.
         {fishing &&
-          " 낚싯대 던지기 버튼으로 찌를 던지고, 물고기가 입질하면 건져올리기 버튼으로 낚아 수집함에 담을 수 있어요."}
+          " 낚싯대 던지기 버튼으로 찌를 던지고, 물고기가 입질하면 건져올리기 버튼으로 낚아 수집함에 담을 수 있어요. 스페이스바로도 던지고, 입질(찌가 쑥 들어간 순간) 때 스페이스바를 누르면 바로 챔질할 수 있어요."}
       </p>
 
       {/* 낚시 모드 배경 확장(장식): 화면 상단에 하늘+수면 레이어를 덧입힌다.

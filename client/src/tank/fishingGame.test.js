@@ -4,6 +4,9 @@ import {
   BITE_WINDOW_MS,
   BITE_CHANCE,
   NIBBLE_MS,
+  LURE_RADIUS,
+  RESIDENT_BITE_INTERVAL_MS,
+  RESIDENT_BITE_CHANCE,
   IDLE,
   CAST,
   NIBBLE,
@@ -15,6 +18,9 @@ import {
   findBiter,
   fishInZone,
   rollBiter,
+  rollResidentBiter,
+  lureVelocity,
+  applyLure,
   gameReducer,
 } from "./fishingGame.js";
 
@@ -110,6 +116,116 @@ describe("rollBiter (진입 시 확률 굴림 — 매 틱 재굴림 아님)", ()
     expect(BITE_CHANCE).toBeLessThanOrEqual(1);
     // rng 를 0 으로 고정하면 어떤 양수 확률에서도 문다.
     expect(rollBiter(["a"], BITE_CHANCE, () => 0)).toBe("a");
+  });
+});
+
+describe("rollResidentBiter (체류 물고기 상시 재굴림 — 던져놓고 무반응 방지)", () => {
+  it("재굴림 간격이 지나기 전이면 굴리지 않고 타이머를 유지한다", () => {
+    const r = rollResidentBiter(["a"], 500, 100, 900, 1, () => 0);
+    expect(r.biterId).toBeNull();
+    expect(r.rolledAt).toBe(100); // 마지막 굴림 시각 그대로
+  });
+
+  it("재굴림 간격이 지나면 굴려서 성공하면 그 물고기를 물고 rolledAt 을 갱신한다", () => {
+    const r = rollResidentBiter(["a"], 1000, 0, 900, 0.5, () => 0.1);
+    expect(r.biterId).toBe("a");
+    expect(r.rolledAt).toBe(1000);
+  });
+
+  it("굴림에 실패해도 rolledAt 은 now 로 갱신된다(다음 굴림은 다시 한 간격을 기다림)", () => {
+    const r = rollResidentBiter(["a"], 1000, 0, 900, 0.5, () => 0.9);
+    expect(r.biterId).toBeNull();
+    expect(r.rolledAt).toBe(1000);
+  });
+
+  it("첫 호출(lastRollAt=null)이면 간격을 기다리지 않고 즉시 굴린다", () => {
+    const r = rollResidentBiter(["a"], 1234, null, 900, 1, () => 0);
+    expect(r.biterId).toBe("a");
+    expect(r.rolledAt).toBe(1234);
+  });
+
+  it("여러 체류 물고기 중 첫 성공 물고기를 고른다", () => {
+    const rolls = [0.9, 0.1];
+    let i = 0;
+    const r = rollResidentBiter(["a", "b"], 1000, 0, 900, 0.5, () => rolls[i++]);
+    expect(r.biterId).toBe("b");
+  });
+
+  it("반경 안에 아무도 없으면 물지 않지만 타이머는 갱신한다", () => {
+    const r = rollResidentBiter([], 1000, 0, 900, 1, () => 0);
+    expect(r.biterId).toBeNull();
+    expect(r.rolledAt).toBe(1000);
+  });
+
+  it("기본 상수(RESIDENT_BITE_INTERVAL_MS/CHANCE)를 쓸 수 있다", () => {
+    expect(RESIDENT_BITE_INTERVAL_MS).toBeGreaterThan(0);
+    expect(RESIDENT_BITE_CHANCE).toBeGreaterThan(0);
+    expect(RESIDENT_BITE_CHANCE).toBeLessThanOrEqual(1);
+    const r = rollResidentBiter(["a"], 5000, null, undefined, undefined, () => 0);
+    expect(r.biterId).toBe("a");
+  });
+});
+
+describe("lureVelocity (미끼 유인 — 찌 쪽으로 약하게 끌어당김)", () => {
+  const bobber = { x: 100, y: 100 };
+
+  it("유인 반경(LURE_RADIUS)은 입질 반경(BITE_RADIUS)보다 넓다", () => {
+    expect(LURE_RADIUS).toBeGreaterThan(BITE_RADIUS);
+  });
+
+  it("반경 안 물고기는 찌 방향으로 속도가 바뀐다(오른쪽 찌면 vx 증가)", () => {
+    const fish = { x: 40, y: 100, vx: 0, vy: 0 }; // 찌는 오른쪽(x=100)
+    const v = lureVelocity(fish, bobber, 100);
+    expect(v.vx).toBeGreaterThan(0); // 오른쪽(찌 쪽)으로 끌림
+    expect(Math.abs(v.vy)).toBeLessThan(1e-6); // 수직 성분 없음(같은 y)
+  });
+
+  it("반경 밖 물고기는 속도가 그대로다", () => {
+    const fish = { x: 100 - (LURE_RADIUS + 5), y: 100, vx: 3, vy: -2 };
+    const v = lureVelocity(fish, bobber, 100);
+    expect(v.vx).toBe(3);
+    expect(v.vy).toBe(-2);
+  });
+
+  it("가까운 물고기가 먼 물고기보다 강하게 끌린다", () => {
+    const near = lureVelocity({ x: 90, y: 100, vx: 0, vy: 0 }, bobber, 100);
+    const far = lureVelocity(
+      { x: 100 - (LURE_RADIUS - 5), y: 100, vx: 0, vy: 0 },
+      bobber,
+      100,
+    );
+    expect(near.vx).toBeGreaterThan(far.vx);
+  });
+
+  it("찌가 없으면(null) 속도를 바꾸지 않는다", () => {
+    const fish = { x: 10, y: 10, vx: 5, vy: 5 };
+    const v = lureVelocity(fish, null, 100);
+    expect(v).toEqual({ vx: 5, vy: 5 });
+  });
+
+  it("결과 속도는 최대 속도 상한을 넘지 않는다(부자연스러운 가속 방지)", () => {
+    // 이미 빠른 물고기에 유인을 더해도 상한으로 잘린다.
+    const fish = { x: 40, y: 100, vx: 400, vy: 0 };
+    const v = lureVelocity(fish, bobber, 100, LURE_RADIUS, 90, 150);
+    expect(Math.hypot(v.vx, v.vy)).toBeLessThanOrEqual(150 + 1e-6);
+  });
+});
+
+describe("applyLure (스프라이트 배열에 유인 일괄 적용)", () => {
+  const bobber = { x: 100, y: 100 };
+
+  it("반경 안 물고기만 새 속도로 바꾸고, 밖은 원본 참조를 유지한다", () => {
+    const inFish = { id: "in", x: 60, y: 100, vx: 0, vy: 0 };
+    const outFish = { id: "out", x: 100 - (LURE_RADIUS + 20), y: 100, vx: 1, vy: 0 };
+    const out = applyLure([inFish, outFish], bobber, 100);
+    expect(out[0]).not.toBe(inFish); // 유인되어 새 객체
+    expect(out[0].vx).toBeGreaterThan(0);
+    expect(out[1]).toBe(outFish); // 영향 없어 원본 참조 유지
+  });
+
+  it("찌가 없으면 배열을 그대로 돌려준다", () => {
+    const arr = [{ id: "a", x: 0, y: 0, vx: 1, vy: 1 }];
+    expect(applyLure(arr, null, 100)).toBe(arr);
   });
 });
 
