@@ -16,7 +16,7 @@ import { colors } from "../theme/colors.js";
 import { TAIL_FOLD_FRACTION, MOUTH_FRACTION } from "../drawing/drawingModel.js";
 
 // 물고기 렌더 크기(원본 그림 대비 축소). 어항에서 아담하게 보이도록.
-const SPRITE_SCALE = 0.4;
+const SPRITE_SCALE = 0.3;
 // 꼬리 파닥임 최대 각도(라디안)와 속도(라디안/초).
 const TAIL_MAX_ANGLE = 0.5;
 const TAIL_SPEED = 7;
@@ -157,7 +157,7 @@ export default function FishTank({
       url: realtimeUrl,
       onOpen: () => {
         // 재연결 시점에 현재 어항 상태로 재동기화한다(REQ-RT-003).
-        if (active) resync().catch(() => {});
+        if (active) resync().catch(() => { });
       },
       onEvent: (event) => {
         if (!active) return;
