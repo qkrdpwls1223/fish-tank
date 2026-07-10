@@ -32,6 +32,11 @@ const CHOMP_SPEED = 14;
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 450;
 
+// 기본 스냅샷 로더는 모듈 스코프에 두어 참조를 고정한다. 컴포넌트 안에서 인라인 화살표로
+// 기본값을 주면 매 렌더마다 새 함수가 생겨 resync → 마운트 useEffect 가 재실행되고,
+// WS 연결이 끊겼다 붙기를 반복하며 GET /api/fish 가 무한 재요청되는 루프가 생긴다.
+const defaultLoadSnapshot = (t) => fetchFishSnapshot({ token: t });
+
 // 떠오르는 물방울 장식(배경 SVG는 이미지라 내부 애니메이션이 없어 별도 레이어로 움직인다).
 const BUBBLES = [
   { left: 14, size: 10, dur: 7, delay: 0 },
@@ -72,7 +77,7 @@ function labelFor(f) {
  */
 export default function FishTank({
   token,
-  loadSnapshot = (t) => fetchFishSnapshot({ token: t }),
+  loadSnapshot = defaultLoadSnapshot,
   connect = connectRealtime,
   realtimeUrl = defaultRealtimeUrl(),
   deleteFish = deleteFishApi,

@@ -334,6 +334,35 @@ describe("FishTank", () => {
     expect(info.textContent).not.toContain("userId");
   });
 
+  // 회귀 방지: loadSnapshot 기본 prop 이 매 렌더마다 새 함수면 resync→마운트 useEffect 가
+  // 재실행되며 GET /api/fish 와 WS 재연결이 무한 반복된다. 기본값을 주입하지 않고
+  // 실제 기본 경로(defaultLoadSnapshot → fetch)를 태워 1회만 호출되는지 확인한다.
+  it("기본 로더 경로에서 스냅샷 로드/연결이 한 번만 일어난다 (재요청 루프 회귀 방지)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => [fish("a")] });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    const { connect, close } = fakeConnect();
+    try {
+      render(<FishTank token="t" connect={connect} />);
+      await screen.findByLabelText("어항");
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      // 루프 버그가 있으면 resync→dispatch→리렌더→effect 재실행이 폭주한다.
+      // 여러 틱을 흘려보낸 뒤에도 호출이 1회로 유지되어야 한다.
+      await new Promise((r) => setTimeout(r, 50));
+
+      const snapshotGets = fetchMock.mock.calls.filter(
+        ([url, opts]) => url === "/api/fish" && (opts?.method ?? "GET") === "GET",
+      );
+      expect(snapshotGets).toHaveLength(1);
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("언마운트 시 실시간 연결을 닫는다", async () => {
     const loadSnapshot = vi.fn().mockResolvedValue([]);
     const { connect, close } = fakeConnect();
