@@ -14,10 +14,10 @@ import {
   fishInZone,
   rollBiter,
   BITE_RADIUS,
-  BITE_WINDOW_MS,
   BITE_CHANCE,
   IDLE,
   CAST,
+  NIBBLE,
   BITING,
   CAUGHT,
   ESCAPED,
@@ -56,6 +56,21 @@ const CLEAR_DELAY_MS = 1400;
 const STRUGGLE_AMPLITUDE = 6;
 // @MX:NOTE: [AUTO] 건져올리기 성공 시 물고기가 수면 위로 끌려 올라가는 모션 길이(ms). CLEAR_DELAY_MS 안에 끝나야 한다.
 const REEL_UP_MS = 650;
+// @MX:NOTE: [AUTO] 낚싯대를 던질 때 찌가 목표 지점으로 수직 낙하하는 시간(ms). 이 시간 뒤에 착수(입질 활성).
+const CAST_DROP_MS = 500;
+// @MX:NOTE: [AUTO] 찌가 낙하를 시작하는, 목표 지점 위쪽 높이(px). 이 높이에서 곧장 아래로 떨어진다.
+const CAST_DROP_HEIGHT = 70;
+// @MX:NOTE: [AUTO] 착수 물보라/입질 파문 링이 퍼지며 사라지는 시간(ms).
+const RIPPLE_MS = 700;
+// @MX:NOTE: [AUTO] 파문 링이 퍼지는 최대 반지름(px).
+const RIPPLE_MAX_R = 34;
+// @MX:NOTE: [AUTO] 본신(strike) 시 찌가 수면 아래로 쑥 들어가는 깊이(px). 명확한 "지금!" 신호.
+const DIP_DEPTH = 16;
+// @MX:NOTE: [AUTO] 대기 중 찌의 잔잔한 아이들 보빙 진폭(px)과 속도(rad/s). 살아있는 느낌.
+const IDLE_BOB_AMP = 2.5;
+const IDLE_BOB_SPEED = 1.8;
+// @MX:NOTE: [AUTO] 예신(nibble) 시 찌가 톡톡 떨리는 진폭(px). 본신 전 전조 신호.
+const NIBBLE_TREMBLE = 3;
 
 // 기본 스냅샷 로더는 모듈 스코프에 두어 참조를 고정한다. 컴포넌트 안에서 인라인 화살표로
 // 기본값을 주면 매 렌더마다 새 함수가 생겨 resync → 마운트 useEffect 가 재실행되고,
@@ -133,6 +148,7 @@ export default function FishTank({
   const canvasRef = useRef(null);
   const spritesRef = useRef(new Map()); // id → sprite(위치/속도), 프레임 간 유지
   const foodsRef = useRef([]); // 임시 먹이 아이템(REQ-INT-001), 프레임 간 유지
+  const ripplesRef = useRef([]); // 착수/입질 물보라 파문(캔버스 전용 시각 효과), 프레임 간 유지
   const boundsRef = useRef({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT }); // 애니메이션 루프가 읽는 현재 헤엄 범위
   // 게임 루프(setInterval)와 rAF 그리기가 최신 게임 상태를 리렌더 없이 읽도록 미러링한다.
   const gameRef = useRef(game);
@@ -267,7 +283,7 @@ export default function FishTank({
     if (gameRef.current.phase !== IDLE) return; // 찌는 한 번에 하나
     const bounds = boundsRef.current;
     const pos = target ?? { x: bounds.width / 2, y: bounds.height / 2 };
-    dispatchGame({ type: "CAST", x: pos.x, y: pos.y });
+    dispatchGame({ type: "CAST", x: pos.x, y: pos.y, now: Date.now() });
   }, []);
 
   // 캔버스 클릭 조준(선택적 향상). 대기 상태에서만 클릭 지점으로 던진다.
@@ -310,12 +326,14 @@ export default function FishTank({
       });
   }, [catchFish, token, announce]);
 
-  // 게임 루프: 입질 판정(확률) + 도망 타이머. rAF(그리기)와 분리한 setInterval 로 돌려
+  // 게임 루프: 입질 판정(확률) + 예신→본신→도망 타이머. rAF(그리기)와 분리한 setInterval 로 돌려
   // 테스트에서 가짜 타이머로 결정적으로 구동한다. Date.now() 는 가짜 타이머에 함께 묶인다.
   useEffect(() => {
     const id = setInterval(() => {
       const g = gameRef.current;
       if (g.phase === CAST) {
+        // 찌가 포물선으로 날아가 착수하기 전에는 입질이 없다(연출 후 판정 시작).
+        if (Date.now() - (g.castAt ?? 0) < CAST_DROP_MS) return;
         // 반경 안 물고기 중 "이번에 새로 진입한" 물고기만 확률 굴림한다(진입당 1회, 매 틱 재굴림 아님).
         const zone = fishInZone(spritePositions(), g.bobber, BITE_RADIUS);
         const fresh = [];
@@ -326,7 +344,8 @@ export default function FishTank({
       } else {
         // 캐스트 상태가 아니면 진입 이력을 비운다 — 다음 캐스트에서 처음부터 새로 굴리도록.
         if (zoneRef.current.size) zoneRef.current = new Set();
-        if (g.phase === BITING && Date.now() - (g.biteStart ?? 0) >= BITE_WINDOW_MS) {
+        // 예신→본신 전이, 본신→도망 전이는 리듀서가 시각을 보고 판단한다.
+        if (g.phase === NIBBLE || g.phase === BITING) {
           dispatchGame({ type: "TICK", now: Date.now() });
         }
       }
@@ -334,12 +353,29 @@ export default function FishTank({
     return () => clearInterval(id);
   }, [spritePositions, rng]);
 
-  // 단계 전이에 따른 안내(입질/도망/던짐). 건짐 성공 문구는 handleReel 의 API 응답에서 낸다.
+  // 단계 전이에 따른 안내(던짐/예신/본신/도망). 건짐 성공 문구는 handleReel 의 API 응답에서 낸다.
   useEffect(() => {
     if (game.phase === CAST) announce("낚싯대를 던졌어요. 입질을 기다려요.");
-    else if (game.phase === BITING) announce("입질이 왔어요! 지금 건져올리기!");
+    else if (game.phase === NIBBLE) announce("찌가 톡톡… 입질이 오고 있어요.");
+    else if (game.phase === BITING) announce("찌가 쑥 들어갔어요! 지금 건져올리기!");
     else if (game.phase === ESCAPED) announce("미끼만 먹고 도망갔어요!");
   }, [game.phase, announce]);
+
+  // 착수 물보라: 찌가 수직으로 떨어져 착수하는 순간(CAST_DROP_MS 뒤) 파문을 남긴다.
+  useEffect(() => {
+    if (game.phase !== CAST || !game.bobber) return undefined;
+    const { x, y } = game.bobber;
+    const t = setTimeout(() => {
+      ripplesRef.current.push({ x, y, start: Date.now() });
+    }, CAST_DROP_MS);
+    return () => clearTimeout(t);
+  }, [game.phase, game.castAt, game.bobber]);
+
+  // 입질 물보라: 본신(strike)으로 찌가 쑥 들어가는 순간 잔물결을 남긴다.
+  useEffect(() => {
+    if (game.phase !== BITING || !game.bobber) return;
+    ripplesRef.current.push({ x: game.bobber.x, y: game.bobber.y, start: Date.now() });
+  }, [game.phase, game.bobber]);
 
   // 도망 연출: 입질하던 물고기가 찌에서 멀어지는 방향으로 확 튀게 속도를 준다(캔버스 시각 효과).
   // 어항 상태(state.fish)는 건드리지 않으므로 비파괴 불변식과 무관하다(REQ-CATCH-003).
@@ -402,9 +438,12 @@ export default function FishTank({
       foodsRef.current = consumeFoods(stepped, foodsRef.current);
       for (const s of stepped) map.set(s.id, s);
       // 훅에 걸린 물고기 시각 오버라이드(공유 어항 state.fish 는 불변 — 비파괴 REQ-CATCH-003):
-      //  - 입질 중: 찌 근처 훅 지점에 고정하고 바둥바둥 떨게 한다(제자리 스트러글).
+      //  - 예신/본신: 찌 근처 훅 지점에 고정하고 바둥바둥 떨게 한다(제자리 스트러글).
       //  - 건짐 성공: 훅 지점에서 수면 위로 끌려 올라가는 모션.
       applyHookedMotion(map, gameRef.current, now);
+      // 수명이 지난 파문은 제거한다(퍼졌다 사라지는 물보라 링).
+      const nowMs = Date.now();
+      ripplesRef.current = ripplesRef.current.filter((r) => nowMs - r.start < RIPPLE_MS);
       drawTank(
         canvasRef.current,
         selectAnimated(stepped),
@@ -412,6 +451,7 @@ export default function FishTank({
         now,
         foodsRef.current,
         gameRef.current,
+        ripplesRef.current,
       );
       raf = requestAnimationFrame(frame);
     };
@@ -745,8 +785,13 @@ export default function FishTank({
   );
 }
 
+// 어항 좌상단 기준 낚싯대 끝(rod tip) 위치. 우상단 모서리 근처에 고정한다(바닥 중앙 캐스트 버튼과 대비).
+function rodTip(bounds) {
+  return { x: bounds.width - 24, y: 12 };
+}
+
 // 캔버스에 먹이와 스프라이트를 그린다. 2D 컨텍스트 미지원(jsdom) 환경에서는 무시한다.
-function drawTank(canvas, sprites, bounds, now, foods = [], game = null) {
+function drawTank(canvas, sprites, bounds, now, foods = [], game = null, ripples = []) {
   if (!canvas) return;
   let ctx = null;
   try {
@@ -757,6 +802,9 @@ function drawTank(canvas, sprites, bounds, now, foods = [], game = null) {
   if (!ctx) return;
 
   ctx.clearRect(0, 0, bounds.width, bounds.height);
+  for (const ripple of ripples) {
+    drawRipple(ctx, ripple);
+  }
   for (const food of foods) {
     drawFoodPellet(ctx, food);
   }
@@ -764,8 +812,30 @@ function drawTank(canvas, sprites, bounds, now, foods = [], game = null) {
     drawFishSprite(ctx, sprite, now);
   }
   if (game && game.bobber) {
-    drawBobber(ctx, game, now);
+    drawBobber(ctx, game, now, bounds);
   }
+}
+
+// 착수/입질 파문: 퍼지며 옅어지는 물보라 링 2겹.
+function drawRipple(ctx, ripple) {
+  const age = Date.now() - ripple.start;
+  const p = Math.min(1, Math.max(0, age / RIPPLE_MS));
+  if (p >= 1) return;
+  const alpha = (1 - p) * 0.6;
+  ctx.save();
+  ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(ripple.x, ripple.y, 4 + p * RIPPLE_MAX_R, 0, Math.PI * 2);
+  ctx.stroke();
+  // 안쪽에 조금 뒤따르는 두 번째 링.
+  const p2 = Math.max(0, p - 0.25);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = `rgba(255,255,255,${(1 - p) * 0.35})`;
+  ctx.beginPath();
+  ctx.arc(ripple.x, ripple.y, 2 + p2 * RIPPLE_MAX_R * 0.7, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 // 건져올리기 진행도(0..1). CAUGHT 상태에서 caughtAt 이후 경과 시간을 REEL_UP_MS 로 정규화한다.
@@ -783,7 +853,14 @@ function applyHookedMotion(map, game, now) {
   const s = map.get(game.biterId);
   if (!s) return;
   const t = (typeof now === "number" ? now : 0) / 1000;
-  if (game.phase === BITING) {
+  if (game.phase === NIBBLE) {
+    // 예신: 훅 지점에 고정하되 아주 작게 톡톡 떨기만 한다(본신 전 전조).
+    s.x = game.bobber.x + Math.sin(t * 26) * NIBBLE_TREMBLE;
+    s.y = game.bobber.y + Math.sin(t * 31) * NIBBLE_TREMBLE * 0.6;
+    s.vx = 0;
+    s.vy = 0;
+    s.eat = 0;
+  } else if (game.phase === BITING) {
     // 바둥바둥: 훅 지점(찌)에 고정하고 서로 다른 주파수의 진동으로 제자리에서 발버둥친다.
     s.x = game.bobber.x + Math.sin(t * 30) * STRUGGLE_AMPLITUDE;
     s.y = game.bobber.y + Math.cos(t * 37) * STRUGGLE_AMPLITUDE;
@@ -801,34 +878,63 @@ function applyHookedMotion(map, game, now) {
   map.set(game.biterId, s);
 }
 
-// 찌(bobber)를 그린다. 입질 중(biting)이면 위아래로 까딱까딱, 건짐 시엔 물고기와 함께 수면 위로 끌려 올라간다.
-function drawBobber(ctx, game, now) {
+// 찌가 그려질 현재 화면 위치를 단계별로 계산한다.
+//   cast(비행): 낚싯대 끝 → 목표 지점 포물선 / cast(착수): 잔잔한 아이들 보빙 /
+//   nibble: 톡톡 미세 떨림 / biting(본신): 수면 아래로 쑥(dip) / caught: 수면 위로 끌려 올라감.
+function bobberScreenPos(game, now, bounds) {
   const { x, y } = game.bobber;
-  const biting = game.phase === BITING;
   const t = (typeof now === "number" ? now : 0) / 1000;
-  // 입질 중에는 빠르고 큰 진폭으로 까딱인다(찌올림/입질 느낌). 대기 중엔 잔잔히 일렁인다.
-  const dip = biting ? Math.sin(t * 18) * 5 : Math.sin(t * 2) * 1.5;
-  // 건짐 시 찌도 물고기를 따라 수면 위로 끌려 올라간다.
-  const rise = game.phase === CAUGHT ? (y + 40) * reelProgress(game) : 0;
-  const by = y + dip - rise;
+
+  if (game.phase === CAST) {
+    const age = Date.now() - (game.castAt ?? 0);
+    if (age < CAST_DROP_MS) {
+      // 수직 낙하: 목표 지점 바로 위에서 x는 고정한 채 곧장 아래로 떨어진다(중력감 있게 가속).
+      const p = age / CAST_DROP_MS;
+      const startY = y - CAST_DROP_HEIGHT;
+      return { x, y: startY + (y - startY) * (p * p), flying: true };
+    }
+    // 착수 후 대기: 잔잔한 아이들 보빙(살아있는 느낌).
+    return { x, y: y + Math.sin(t * IDLE_BOB_SPEED) * IDLE_BOB_AMP, flying: false };
+  }
+  if (game.phase === NIBBLE) {
+    // 예신: 톡톡 미세 떨림.
+    return { x: x + Math.sin(t * 26) * 1.5, y: y + Math.sin(t * 22) * NIBBLE_TREMBLE, flying: false };
+  }
+  if (game.phase === BITING) {
+    // 본신: 수면 아래로 쑥 들어간 채 부르르 떤다.
+    return { x, y: y + DIP_DEPTH + Math.sin(t * 20) * 2, flying: false };
+  }
+  if (game.phase === CAUGHT) {
+    // 건짐: 물고기와 함께 수면 위로 끌려 올라간다.
+    const rise = (y + 40) * reelProgress(game);
+    return { x, y: y - rise, flying: false };
+  }
+  return { x, y, flying: false };
+}
+
+// 찌(bobber)와 낚싯대 끝→찌 낚싯줄을 그린다. 단계별 위치는 bobberScreenPos 가 계산한다.
+function drawBobber(ctx, game, now, bounds) {
+  const pos = bobberScreenPos(game, now, bounds);
+  const tip = rodTip(bounds);
+  const biting = game.phase === BITING;
+  const r = biting ? 8 : 6;
 
   ctx.save();
-  // 수면에서 찌까지 이어지는 낚싯줄.
+  // 낚싯대 끝에서 찌까지 이어지는 낚싯줄(캐스트/스트러글/끌어올리기 내내 찌를 따라간다).
   ctx.beginPath();
-  ctx.moveTo(x, 0);
-  ctx.lineTo(x, by - 8);
-  ctx.strokeStyle = "rgba(255,255,255,0.65)";
+  ctx.moveTo(tip.x, tip.y);
+  ctx.lineTo(pos.x, pos.y - r);
+  ctx.strokeStyle = "rgba(255,255,255,0.6)";
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // 찌 몸통: 위(빨강)/아래(흰) 반반. 입질 중엔 조금 커진다.
-  const r = biting ? 8 : 6;
+  // 찌 몸통: 위(빨강)/아래(흰) 반반. 본신 땐 조금 커진다.
   ctx.beginPath();
-  ctx.arc(x, by, r, 0, Math.PI * 2);
+  ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
   ctx.fillStyle = "#e11d48";
   ctx.fill();
   ctx.beginPath();
-  ctx.arc(x, by + r * 0.5, r * 0.55, 0, Math.PI * 2);
+  ctx.arc(pos.x, pos.y + r * 0.5, r * 0.55, 0, Math.PI * 2);
   ctx.fillStyle = "#ffffff";
   ctx.fill();
   ctx.restore();

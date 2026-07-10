@@ -3,8 +3,10 @@ import {
   BITE_RADIUS,
   BITE_WINDOW_MS,
   BITE_CHANCE,
+  NIBBLE_MS,
   IDLE,
   CAST,
+  NIBBLE,
   BITING,
   CAUGHT,
   ESCAPED,
@@ -131,12 +133,18 @@ describe("gameReducer (상태 기계 전이)", () => {
     expect(again).toBe(cast); // 상태 불변(무시)
   });
 
-  it("cast 에서 BITE(biterId) 를 받으면 입질(biting)로 전이하고 시작 시각을 기록한다", () => {
+  it("idle 에서 CAST 하면 castAt(투척 시각)을 기록한다(포물선 연출 기준)", () => {
+    const s = gameReducer(initialGameState(), { type: "CAST", x: 0, y: 0, now: 777 });
+    expect(s.castAt).toBe(777);
+  });
+
+  it("cast 에서 BITE(biterId) 를 받으면 예신(nibble)로 전이하고 nibbleStart 를 기록한다(본신 아님)", () => {
     const cast = gameReducer(initialGameState(), { type: "CAST", x: 0, y: 0 });
-    const biting = gameReducer(cast, { type: "BITE", biterId: "f1", now: 1000 });
-    expect(biting.phase).toBe(BITING);
-    expect(biting.biterId).toBe("f1");
-    expect(biting.biteStart).toBe(1000);
+    const nibble = gameReducer(cast, { type: "BITE", biterId: "f1", now: 1000 });
+    expect(nibble.phase).toBe(NIBBLE);
+    expect(nibble.biterId).toBe("f1");
+    expect(nibble.nibbleStart).toBe(1000);
+    expect(nibble.biteStart).toBeNull(); // 본신(챔질 창)은 아직 열리지 않았다
   });
 
   it("biterId 없는 BITE 는 무시한다", () => {
@@ -149,58 +157,95 @@ describe("gameReducer (상태 기계 전이)", () => {
     expect(gameReducer(s, { type: "BITE", biterId: "x", now: 1 })).toBe(s);
   });
 
-  it("입질 중 타이밍 창이 지나기 전 TICK 은 상태를 유지한다", () => {
-    const biting = biteAt(0);
-    const t = gameReducer(biting, { type: "TICK", now: BITE_WINDOW_MS - 1 });
-    expect(t).toBe(biting);
+  it("예신 시간이 지나기 전 TICK 은 예신을 유지한다", () => {
+    const nibble = nibbleAt(0);
+    const t = gameReducer(nibble, { type: "TICK", now: NIBBLE_MS - 1 });
+    expect(t).toBe(nibble);
+    expect(t.phase).toBe(NIBBLE);
+  });
+
+  it("예신 시간 경과 시 TICK 하면 본신(biting/strike)으로 전이하고 biteStart 를 연다", () => {
+    const nibble = nibbleAt(0);
+    const t = gameReducer(nibble, { type: "TICK", now: NIBBLE_MS });
+    expect(t.phase).toBe(BITING);
+    expect(t.biteStart).toBe(NIBBLE_MS); // 챔질 창은 본신 시점부터 잰다
+    expect(t.biterId).toBe("f1");
+  });
+
+  it("예신 중 REEL 은 헛챔질(무시) — 본신 전에는 못 챈다", () => {
+    const nibble = nibbleAt(0);
+    expect(gameReducer(nibble, { type: "REEL", now: 1 })).toBe(nibble);
+  });
+
+  it("본신 타이밍 창이 지나기 전 TICK 은 본신을 유지한다", () => {
+    const strike = strikeAt(0);
+    const t = gameReducer(strike, { type: "TICK", now: BITE_WINDOW_MS - 1 });
+    expect(t).toBe(strike);
     expect(t.phase).toBe(BITING);
   });
 
-  it("입질 중 타이밍 창 경과 시 TICK 하면 미끼만 먹고 도망(escaped)한다", () => {
-    const biting = biteAt(0);
-    const t = gameReducer(biting, { type: "TICK", now: BITE_WINDOW_MS });
+  it("본신 타이밍 창 경과 시 TICK 하면 미끼만 먹고 도망(escaped)한다", () => {
+    const strike = strikeAt(0);
+    const t = gameReducer(strike, { type: "TICK", now: BITE_WINDOW_MS });
     expect(t.phase).toBe(ESCAPED);
     // 어떤 물고기가 도망쳤는지 알 수 있도록 biterId 는 유지된다(캔버스 도망 연출용).
     expect(t.biterId).toBe("f1");
   });
 
-  it("입질 중 REEL 하면 건짐 성공(caught)이며 biterId·caughtAt 을 기록한다", () => {
-    const biting = biteAt(0);
-    const c = gameReducer(biting, { type: "REEL", now: 1234 });
+  it("본신 중 REEL 하면 건짐 성공(caught)이며 biterId·caughtAt 을 기록한다", () => {
+    const strike = strikeAt(0);
+    const c = gameReducer(strike, { type: "REEL", now: 1234 });
     expect(c.phase).toBe(CAUGHT);
     expect(c.biterId).toBe("f1"); // 이 id 로 catch API 를 호출한다
     expect(c.caughtAt).toBe(1234); // 끌어올리기 모션 진행도 기준 시각
   });
 
-  it("입질이 아닐 때 REEL 은 무시된다(타이밍을 놓치면 헛챔질)", () => {
+  it("cast(입질 전) 상태의 REEL 은 무시된다", () => {
     const cast = gameReducer(initialGameState(), { type: "CAST", x: 0, y: 0 });
     expect(gameReducer(cast, { type: "REEL" })).toBe(cast);
   });
 
   it("도망 후 REEL 은 성공하지 않는다(창을 놓쳤으므로)", () => {
-    const escaped = gameReducer(biteAt(0), { type: "TICK", now: BITE_WINDOW_MS });
+    const escaped = gameReducer(strikeAt(0), { type: "TICK", now: BITE_WINDOW_MS });
     expect(gameReducer(escaped, { type: "REEL" })).toBe(escaped);
   });
 
   it("CLEAR 는 어느 단계에서든 초기(idle)로 되돌린다 — 다시 던질 수 있다", () => {
-    const caught = gameReducer(biteAt(0), { type: "REEL" });
+    const caught = gameReducer(strikeAt(0), { type: "REEL" });
     const cleared = gameReducer(caught, { type: "CLEAR" });
     expect(cleared).toEqual(initialGameState());
   });
 
-  it("커스텀 window 를 TICK 에서 존중한다", () => {
-    const biting = biteAt(0);
-    expect(gameReducer(biting, { type: "TICK", now: 500, window: 1000 }).phase).toBe(
+  it("커스텀 nibbleMs 를 TICK 에서 존중한다", () => {
+    const nibble = nibbleAt(0);
+    expect(gameReducer(nibble, { type: "TICK", now: 200, nibbleMs: 300 }).phase).toBe(
+      NIBBLE,
+    );
+    expect(gameReducer(nibble, { type: "TICK", now: 300, nibbleMs: 300 }).phase).toBe(
       BITING,
     );
-    expect(gameReducer(biting, { type: "TICK", now: 1000, window: 1000 }).phase).toBe(
+  });
+
+  it("커스텀 window 를 TICK 에서 존중한다", () => {
+    const strike = strikeAt(0);
+    expect(gameReducer(strike, { type: "TICK", now: 500, window: 1000 }).phase).toBe(
+      BITING,
+    );
+    expect(gameReducer(strike, { type: "TICK", now: 1000, window: 1000 }).phase).toBe(
       ESCAPED,
     );
   });
 });
 
-// 입질 시작 상태 헬퍼: biteStart = start 로 biting 상태를 만든다.
-function biteAt(start) {
+// 예신(nibble) 상태 헬퍼: nibbleStart = start.
+function nibbleAt(start) {
   const cast = gameReducer(initialGameState(), { type: "CAST", x: 0, y: 0 });
   return gameReducer(cast, { type: "BITE", biterId: "f1", now: start });
+}
+
+// 본신(strike/biting) 상태 헬퍼: 예신을 거쳐 biteStart = start 인 본신을 만든다.
+// 예신을 start-NIBBLE_MS 에 시작해 now=start 에서 본신으로 넘어가면 biteStart=start 가 된다.
+function strikeAt(start) {
+  const nibble = nibbleAt(start - NIBBLE_MS);
+  return gameReducer(nibble, { type: "TICK", now: start });
 }

@@ -64,6 +64,14 @@ async function advance(ms) {
   });
 }
 
+// 캐스트 직후: 찌 착수(CAST_ARC_MS≈500) → 예신(NIBBLE_MS≈500) → 본신(strike)까지 넉넉히 진행.
+// 본신에 들어가야 건져올리기가 활성화된다(챔질 창은 이후 2초).
+// 여러 번에 나눠 진행해야 각 단계 전이(cast→nibble→strike) 사이에 리렌더로 gameRef 가 갱신된다
+// — 한 번의 advanceTimersByTime 안에서는 리렌더가 지연돼 다단계 전이가 진행되지 않는다.
+async function advanceToStrike() {
+  for (let i = 0; i < 8; i += 1) await advance(200);
+}
+
 // 렌더 + 초기 스냅샷 로드 flush. getSpritePositions 로 입질 대상 위치를 주입한다.
 // rng 기본값 () => 0 은 입질 확률(BITE_CHANCE) 굴림을 항상 성공시켜 결정적으로 입질을 만든다.
 async function renderGame({ fishList = [], positions = [], catchImpl, rng } = {}) {
@@ -106,14 +114,20 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     expect(region()).toHaveAttribute("aria-live");
   });
 
-  it("물고기가 찌 반경 안으로 오면 입질이 오고 건져올리기가 활성화된다 (REQ-CATCH-001, NFR-A11Y-001)", async () => {
+  it("입질은 예신(톡톡) → 본신(쑥) 2단계로 오고, 본신에서만 건져올리기가 활성화된다 (REQ-CATCH-001, NFR-A11Y-001)", async () => {
     await renderGame({ positions: [{ id: "a", x: CENTER.x, y: CENTER.y }] });
 
     fireEvent.click(castBtn());
-    await advance(200); // 게임 틱(입질 판정)
 
+    // 착수 후 예신(nibble) 단계: 아직 본신이 아니라 챔질 불가.
+    await advance(700);
+    expect(region()).toHaveTextContent("톡톡");
+    expect(reelBtn()).toBeDisabled();
+
+    // 예신 시간이 지나면 본신(strike)으로 찌가 쑥 들어가고 챔질 창이 열린다.
+    await advance(700);
+    expect(region()).toHaveTextContent("쑥 들어갔어요");
     expect(reelBtn()).toBeEnabled();
-    expect(region()).toHaveTextContent("입질이 왔어요");
   });
 
   it("확률 굴림에 실패하면 물고기가 그냥 스쳐 지나가 입질이 오지 않고, 같은 물고기를 매 틱 재굴림하지 않는다 (BITE_CHANCE)", async () => {
@@ -137,7 +151,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     });
 
     fireEvent.click(castBtn());
-    await advance(200); // 입질 발생
+    await advanceToStrike(); // 입질 발생
     fireEvent.click(reelBtn());
     await advance(0); // catchFish 응답 flush
 
@@ -152,7 +166,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     });
 
     fireEvent.click(castBtn());
-    await advance(200);
+    await advanceToStrike();
     fireEvent.click(reelBtn());
     await advance(0);
 
@@ -168,7 +182,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     });
 
     fireEvent.click(castBtn());
-    await advance(200);
+    await advanceToStrike();
     fireEvent.click(reelBtn());
     await advance(0);
 
@@ -181,7 +195,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     });
 
     fireEvent.click(castBtn());
-    await advance(200); // 입질 발생
+    await advanceToStrike(); // 입질 발생
     expect(reelBtn()).toBeEnabled();
 
     // 건져올리지 않고 입질 창을 넘긴다 → 도망.
@@ -200,7 +214,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     });
 
     fireEvent.click(castBtn());
-    await advance(200);
+    await advanceToStrike();
     fireEvent.click(reelBtn());
     await advance(0);
 
@@ -218,7 +232,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     });
 
     fireEvent.click(castBtn());
-    await advance(200);
+    await advanceToStrike();
     await advance(BITE_WINDOW_MS + 200); // 도망
 
     fireEvent.click(screen.getByRole("button", { name: /목록 열기/ }));
@@ -232,7 +246,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     });
 
     fireEvent.click(castBtn());
-    await advance(200);
+    await advanceToStrike();
     fireEvent.click(reelBtn());
     await advance(0);
 
@@ -243,7 +257,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     await renderGame({ positions: [{ id: "a", x: CENTER.x, y: CENTER.y }] });
 
     fireEvent.click(castBtn());
-    await advance(200);
+    await advanceToStrike();
     await advance(BITE_WINDOW_MS + 200); // 도망
     expect(castBtn()).toBeDisabled(); // 연출 중
 
@@ -258,7 +272,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     });
 
     fireEvent.click(screen.getByLabelText("어항"), { clientX: 300, clientY: 150 });
-    await advance(200);
+    await advanceToStrike();
 
     expect(reelBtn()).toBeEnabled();
     fireEvent.click(reelBtn());

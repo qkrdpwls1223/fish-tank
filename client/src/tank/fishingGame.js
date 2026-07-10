@@ -6,19 +6,29 @@
 //   들어오면 입질로 본다. 게임 난도(입질이 쉽게 오는 정도) 튜닝 지점.
 export const BITE_RADIUS = 70;
 
-// @MX:NOTE: [AUTO] 입질 유지 시간(ms). 입질 시작 후 이 시간 안에 건져올리지 못하면
-//   물고기가 미끼만 먹고 도망친다(ESCAPED). 게임 타이밍 난도 튜닝 지점.
+// @MX:NOTE: [AUTO] 본신(strike) 유지 시간(ms). 찌가 쑥 들어간 뒤 이 시간 안에 건져올리지 못하면
+//   물고기가 미끼만 먹고 도망친다(ESCAPED). 챔질 타이밍 난도 튜닝 지점.
 export const BITE_WINDOW_MS = 2000;
+
+// @MX:NOTE: [AUTO] 예신(nibble) 지속 시간(ms). 물고기가 문 직후 톡톡 건드리는 전조 단계.
+//   이 시간이 지나면 본신(strike, BITING)으로 전이되어 챔질 창이 열린다. 튜닝 지점.
+export const NIBBLE_MS = 500;
 
 // @MX:NOTE: [AUTO] 물고기가 찌 반경에 새로 진입할 때마다 실제로 무는(hook) 확률.
 //   진입할 때 딱 한 번만 굴린다(매 틱 재굴림 아님) — 실패하면 그냥 스쳐 지나간다.
 //   게임 난도(입질이 얼마나 잘 오는지) 튜닝 지점. 0..1.
 export const BITE_CHANCE = 0.5;
 
-// 상태 기계의 단계. idle: 대기 / cast: 찌 투척 후 입질 대기 /
-// biting: 입질 중(건짐 타이밍 창) / caught: 건짐 성공 / escaped: 미끼만 먹고 도망.
+// 상태 기계의 단계.
+//   idle:    대기(찌 없음)
+//   cast:    찌 투척 후 입질 대기
+//   nibble:  예신 — 물고기가 문 직후 톡톡 건드리는 전조(챔질 아직 불가)
+//   biting:  본신(strike) — 찌가 쑥 들어감. 건짐 타이밍 창이 열린다(챔질 가능)
+//   caught:  건짐 성공
+//   escaped: 미끼만 먹고 도망
 export const IDLE = "idle";
 export const CAST = "cast";
+export const NIBBLE = "nibble";
 export const BITING = "biting";
 export const CAUGHT = "caught";
 export const ESCAPED = "escaped";
@@ -28,7 +38,15 @@ export const ESCAPED = "escaped";
  * @returns {{phase:string, bobber:{x:number,y:number}|null, biterId:string|null, biteStart:number|null}}
  */
 export function initialGameState() {
-  return { phase: IDLE, bobber: null, biterId: null, biteStart: null, caughtAt: null };
+  return {
+    phase: IDLE,
+    bobber: null,
+    biterId: null,
+    castAt: null, // 캐스트 시각(찌 날아가는 포물선 연출 진행도 기준)
+    nibbleStart: null, // 예신 시작 시각
+    biteStart: null, // 본신(strike) 시작 시각 = 챔질 창 기준
+    caughtAt: null, // 건짐 성공 시각(끌어올리기 모션 기준)
+  };
 }
 
 // 두 점 사이 유클리드 거리(px).
@@ -93,14 +111,15 @@ export function rollBiter(freshIds, chance = BITE_CHANCE, rng = Math.random) {
  * 낚시 상태 기계(순수 리듀서). 유효하지 않은 전이는 상태를 그대로 반환한다.
  *
  * 전이:
- *   idle   --CAST(x,y)-->        cast
- *   cast   --BITE(biterId,now)--> biting
- *   biting --TICK(now, 창 경과)-->  escaped
- *   biting --REEL-->             caught
- *   *      --CLEAR-->            idle
+ *   idle   --CAST(x,y,now)-->        cast
+ *   cast   --BITE(biterId,now)-->    nibble   (예신 시작)
+ *   nibble --TICK(now, 예신 경과)-->   biting   (본신/strike, 챔질 창 열림)
+ *   biting --TICK(now, 창 경과)-->     escaped
+ *   biting --REEL(now)-->            caught
+ *   *      --CLEAR-->                idle
  *
  * @param {ReturnType<typeof initialGameState>} state
- * @param {{type:string, x?:number, y?:number, biterId?:string, now?:number, window?:number}} action
+ * @param {{type:string, x?:number, y?:number, biterId?:string, now?:number, window?:number, nibbleMs?:number}} action
  */
 export function gameReducer(state, action) {
   switch (action.type) {
@@ -108,34 +127,46 @@ export function gameReducer(state, action) {
       // 찌는 한 번에 하나만: 대기(idle) 상태에서만 새로 던질 수 있다.
       if (state.phase !== IDLE) return state;
       return {
+        ...initialGameState(),
         phase: CAST,
         bobber: { x: action.x, y: action.y },
-        biterId: null,
-        biteStart: null,
+        castAt: action.now ?? 0,
       };
 
     case "BITE":
-      // 입질은 투척(cast) 상태에서만 시작된다. biterId 없는 BITE 는 무시.
+      // 입질(예신)은 투척(cast) 상태에서만 시작된다. biterId 없는 BITE 는 무시.
       if (state.phase !== CAST || !action.biterId) return state;
       return {
         ...state,
-        phase: BITING,
+        phase: NIBBLE,
         biterId: action.biterId,
-        biteStart: action.now ?? 0,
+        nibbleStart: action.now ?? 0,
+        biteStart: null,
       };
 
     case "TICK": {
-      // 입질 중일 때만 도망 판정. 창(window) 이 경과하면 미끼만 먹고 도망(ESCAPED).
-      if (state.phase !== BITING) return state;
-      const window = action.window ?? BITE_WINDOW_MS;
-      if ((action.now ?? 0) - (state.biteStart ?? 0) >= window) {
-        return { ...state, phase: ESCAPED };
+      const now = action.now ?? 0;
+      // 예신 → 본신(strike): 예신 시간이 지나면 찌가 쑥 들어가며 챔질 창이 열린다.
+      if (state.phase === NIBBLE) {
+        const nibbleMs = action.nibbleMs ?? NIBBLE_MS;
+        if (now - (state.nibbleStart ?? 0) >= nibbleMs) {
+          return { ...state, phase: BITING, biteStart: now };
+        }
+        return state;
+      }
+      // 본신 유지 중 창(window)이 경과하면 미끼만 먹고 도망(ESCAPED).
+      if (state.phase === BITING) {
+        const window = action.window ?? BITE_WINDOW_MS;
+        if (now - (state.biteStart ?? 0) >= window) {
+          return { ...state, phase: ESCAPED };
+        }
+        return state;
       }
       return state;
     }
 
     case "REEL":
-      // 건져올리기는 오직 입질 중(타이밍 창 안)에만 성공한다. caughtAt 은 끌어올리기 모션 진행도 기준점.
+      // 건져올리기는 오직 본신(strike, 타이밍 창 안)에만 성공한다. 예신 중 챔질은 헛챔질(무시).
       if (state.phase !== BITING) return state;
       return { ...state, phase: CAUGHT, caughtAt: action.now ?? 0 };
 
