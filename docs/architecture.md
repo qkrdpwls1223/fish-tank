@@ -6,15 +6,15 @@ SPEC: `.moai/specs/SPEC-TANK-001/spec.md` · 상세 API 형식: `docs/api.md`
 
 ```
 fish-tank/
-  client/   React 18 + Vite — Teams 탭 부트스트랩, SSO, 드로잉/어항 렌더링
-  server/   Node.js + Express — Teams SSO 검증, 물고기 CRUD, 실시간 브로드캐스트
+  client/   React 18 + Vite — Microsoft SSO(MSAL) 로그인, 드로잉/어항 렌더링
+  server/   Node.js + Express — SSO 토큰 검증, 물고기 CRUD, 실시간 브로드캐스트
 ```
 
 npm workspaces 로 두 패키지를 하나의 저장소에서 관리합니다(`package.json` 루트 `workspaces: ["client", "server"]`).
 
 ```mermaid
 flowchart LR
-  subgraph Client["client (React, Teams 탭)"]
+  subgraph Client["client (React, 브라우저)"]
     A["App.jsx\n(인증 상태 머신)"] --> B["FishComposer.jsx\n(드로잉 → 등록)"]
     A --> C["FishTank.jsx\n(스냅샷 렌더 + 실시간 반영)"]
     C --> D["realtimeClient.js\n(WS 재연결/재동기화)"]
@@ -32,12 +32,12 @@ flowchart LR
   end
 
   subgraph Infra["외부 의존성"]
-    N["Microsoft Teams JS SDK\n(SSO)"]
+    N["MSAL.js (Entra ID)\n(SSO 리다이렉트 로그인)"]
     O["Azure AD JWKS\n(토큰 서명 검증)"]
     P["PostgreSQL\n(fish 테이블)"]
   end
 
-  A -- "getAuthToken" --> N
+  A -- "acquireMsalToken" --> N
   E -- "Bearer JWT" --> G
   F -- "Bearer JWT" --> G
   D <-- "ws(s)://.../realtime" --> M
@@ -50,7 +50,7 @@ flowchart LR
 | 모듈 | 책임 |
 |---|---|
 | `src/App.jsx` | 앱 셸. `authMachine` 상태(`idle→authenticating→authenticated/error`)에 따라 UI 전환, 인증 실패 시 재시도 버튼 노출(REQ-AUTH-004) |
-| `src/auth/teamsAuth.js` | Teams JS SDK로 SSO 토큰 획득(`acquireTeamsSsoToken`) |
+| `src/auth/msalAuth.js` | MSAL.js 리다이렉트 로그인으로 액세스 토큰 획득(`acquireMsalToken`), 테넌트 고정 authority |
 | `src/auth/authMachine.js` | 순수 리듀서. `canWrite(state)` 로 쓰기 UI 활성화 여부 판정 |
 | `src/drawing/DrawingCanvas.jsx`, `drawingModel.js` | 자유 드로잉 캔버스(undo/clear), 스트로크 직렬화 |
 | `src/fish/FishComposer.jsx`, `fishApi.js` | 이름/익명 선택 등록 UI, `POST /api/fish` 호출 |
@@ -129,7 +129,7 @@ sequenceDiagram
 
 이 프로젝트의 핵심 보안 불변식은 **"내부 소유권 추적과 화면 노출은 완전히 분리된다"** 입니다.
 
-- **저장 시**: 익명 물고기도 예외 없이 `ownerId`(검증된 Teams `oid` 클레임)를 내부적으로 저장합니다(REQ-OWN-001). `displayMode: "anonymous"` 이면 `displayName` 은 저장 단계에서부터 `null` 로 고정됩니다.
+- **저장 시**: 익명 물고기도 예외 없이 `ownerId`(검증된 토큰의 `oid` 클레임)를 내부적으로 저장합니다(REQ-OWN-001). `displayMode: "anonymous"` 이면 `displayName` 은 저장 단계에서부터 `null` 로 고정됩니다.
 - **읽기 시**: 모든 물고기 읽기 경로(`GET /api/fish` 응답, WS `fish_added` 이벤트)는 `publicFish.js` 의 투영 함수를 반드시 통과합니다.
   - `toPublicFish` — `ownerId` 를 완전히 제거한 공개 형식. WS 브로드캐스트가 사용(전 사용자 공용이므로 개인화 필드가 없어야 함).
   - `toViewerFish` — `toPublicFish` 위에 요청자 기준 `deletable`(불리언) 만 추가. `deletable` 계산에는 내부 `ownerId` 를 사용하지만, **그 값 자체는 응답에 절대 포함되지 않습니다**. `GET /api/fish` 스냅샷 응답이 사용(사용자별로 삭제 가능 여부가 달라야 하므로 REST 경로에만 존재하고 WS 이벤트에는 없음).
@@ -138,17 +138,17 @@ sequenceDiagram
 
 이 경계는 `server/src/fish/publicFish.js`, `server/src/routes/fish.js` 의 `@MX:ANCHOR` 주석에 명시되어 있으며, 관련 유닛 테스트(`publicFish.test.js`, `fish.test.js`)가 익명 신원 비노출과 소유권 검증을 각각 증명합니다.
 
-## 7. 인증 흐름 (Teams SSO)
+## 7. 인증 흐름 (Microsoft SSO — MSAL 리다이렉트)
 
 ```mermaid
 sequenceDiagram
-  participant T as Teams 클라이언트
+  participant T as Entra ID (login.microsoftonline.com)
   participant C as App.jsx
   participant S as Server(authMiddleware)
   participant AAD as Azure AD (JWKS)
 
-  C->>T: acquireTeamsSsoToken() (Teams JS SDK)
-  T-->>C: JWT
+  C->>T: acquireMsalToken() — 계정 없으면 loginRedirect, 있으면 acquireTokenSilent
+  T-->>C: 액세스 토큰(JWT, aud=api://…, 테넌트 고정 authority)
   C->>S: GET /api/me (Authorization: Bearer JWT)
   S->>AAD: jwtVerify(jwks, {audience, issuer})
   AAD-->>S: 서명/클레임 검증 결과

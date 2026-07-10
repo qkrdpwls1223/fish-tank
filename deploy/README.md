@@ -6,7 +6,7 @@ fish-tank 는 nginx 뒤(내부 HTTP 3000)에 배치하고 전용 PostgreSQL 을 
 
 ```
 [사용자 PC] --공인 DNS--> 10.10.33.36
-   Teams 탭 --HTTPS--> [nginx:443] --shared-net--> [fishtank-app:3000] --internal--> [fishtank-db:5432]
+   브라우저 --HTTPS--> [nginx:443] --shared-net--> [fishtank-app:3000] --internal--> [fishtank-db:5432]
 ```
 
 ## 1. 이름 해석 — 공인 DNS 등록
@@ -68,7 +68,23 @@ curl https://fishtank.formationlabs.co.kr/healthz   # {"status":"ok"}
 ```
 
 브라우저에서 https://fishtank.formationlabs.co.kr 접속 → 인증서 신뢰 확인(자물쇠)
-→ Teams 패키지 업로드는 teams/README.md 참고.
+→ Microsoft 로그인 페이지로 리다이렉트 → 회사 계정 로그인 후 어항 표시.
+
+## 6. Azure 앱 등록 (Microsoft SSO — 브라우저 로그인)
+
+Teams 앱 배포는 중단했고, 일반 브라우저에서 MSAL.js 리다이렉트 로그인으로
+Microsoft SSO 를 유지한다. Azure Portal 의 기존 앱 등록에서 아래를 확인한다:
+
+1. **인증 > 플랫폼 추가 > 단일 페이지 애플리케이션(SPA)** 에 리다이렉트 URI
+   `https://fishtank.formationlabs.co.kr` 등록.
+2. **API 노출(Expose an API)** 에 `access_as_user` 스코프가 있는지 확인
+   (Teams SSO 시절 만든 `api://fishtank.formationlabs.co.kr/<client-id>` 그대로 사용).
+3. 클라이언트 설정(클라이언트 ID/테넌트 ID/Application ID URI)은
+   `deploy/docker-compose.yml` 의 build args 로 빌드 시점에 주입된다 —
+   `.env` 의 `TEAMS_APP_CLIENT_ID`, `TEAMS_TENANT_ID` 만 채우면 된다.
+
+로그인은 회사 테넌트(authority 고정) + 서버 issuer/audience 검증으로
+회사 Microsoft 계정만 허용된다.
 
 ## 업데이트 배포
 

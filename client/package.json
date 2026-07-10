@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "랜선어항 프론트엔드 (React + Vite) — Teams 탭 부트스트랩, SSO, 드로잉/어항 렌더링",
+  "description": "랜선어항 프론트엔드 (React + Vite) — Microsoft SSO(MSAL), 드로잉/어항 렌더링",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,7 +13,7 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@microsoft/teams-js": "^2.31.0",
+    "@azure/msal-browser": "^5.17.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

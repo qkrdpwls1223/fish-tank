@@ -10,6 +10,11 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        # 클라이언트(MSAL) 빌드 타임 설정 — 서버 검증 값과 동일한 앱 등록을 사용한다.
+        VITE_TEAMS_APP_CLIENT_ID: ${TEAMS_APP_CLIENT_ID:?}
+        VITE_TEAMS_TENANT_ID: ${TEAMS_TENANT_ID:?}
+        VITE_TEAMS_APP_ID_URI: api://fishtank.formationlabs.co.kr/${TEAMS_APP_CLIENT_ID:?}
     container_name: fishtank-app
     restart: unless-stopped
     environment:
@@ -17,8 +22,8 @@ services:
       DATABASE_URL: postgres://fishtank:${FISHTANK_DB_PASSWORD:?}@fishtank-db:5432/fishtank
       TEAMS_APP_CLIENT_ID: ${TEAMS_APP_CLIENT_ID:?}
       # Application ID URI(도메인 포함). 토큰 aud 가 이 값으로 오므로 허용 목록에 포함된다.
-      # Teams SSO 는 resource 도메인이 iframe origin(fishtank.formationlabs.co.kr)과
-      # 일치할 것을 요구하므로 도메인 형태가 필수다.
+      # 클라이언트(MSAL)가 같은 URI 의 access_as_user 스코프를 요청하므로 build args
+      # 의 VITE_TEAMS_APP_ID_URI 와 반드시 동일해야 한다.
       TEAMS_APP_ID_URI: api://fishtank.formationlabs.co.kr/${TEAMS_APP_CLIENT_ID:?}
       TEAMS_TENANT_ID: ${TEAMS_TENANT_ID:?}
     depends_on:

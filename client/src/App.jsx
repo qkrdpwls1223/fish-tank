@@ -4,15 +4,15 @@ import {
   authReducer,
   canWrite,
 } from "./auth/authMachine.js";
-import { acquireTeamsSsoToken } from "./auth/teamsAuth.js";
+import { acquireMsalToken } from "./auth/msalAuth.js";
 import FishComposer from "./fish/FishComposer.jsx";
 import FishTank from "./tank/FishTank.jsx";
 
-// 기본 인증 함수: Teams SSO 토큰을 획득하고 백엔드에서 신원을 검증받는다.
+// 기본 인증 함수: Microsoft SSO(MSAL) 토큰을 획득하고 백엔드에서 신원을 검증받는다.
 // 테스트에서는 authenticate prop 을 주입해 이 경로를 대체한다. (REQ-AUTH-001/002)
 // 토큰은 쓰기 작업(물고기 생성) 제출에 사용하므로 신원과 함께 반환한다.
 async function defaultAuthenticate() {
-  // 개발 전용 우회: Teams 밖(브라우저)에서 로컬 시험용. 개발 빌드 + 플래그일 때만.
+  // 개발 전용 우회: 로컬에서 실제 로그인 없이 시험용. 개발 빌드 + 플래그일 때만.
   // 프로덕션 빌드에서는 import.meta.env.DEV 가 false 이므로 절대 활성화되지 않는다.
   if (import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS) {
     return {
@@ -22,7 +22,7 @@ async function defaultAuthenticate() {
     };
   }
 
-  const token = await acquireTeamsSsoToken();
+  const token = await acquireMsalToken();
   const res = await fetch("/api/me", {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -53,7 +53,7 @@ export default function App({ authenticate = defaultAuthenticate, tankProps = {}
       setToken(identity?.token ?? null);
       dispatch({ type: "AUTH_SUCCESS", identity });
     } catch (error) {
-      // 임시 진단: 로그인 실패의 실제 원인(코드/메시지/Teams SDK cause)을 콘솔에 노출.
+      // 임시 진단: 로그인 실패의 실제 원인(코드/메시지/MSAL cause)을 콘솔에 노출.
       // 원인 파악 후 제거 예정.
       console.error(
         "[fish-tank auth 실패]",

@@ -10,6 +10,14 @@ COPY server/package.json server/
 RUN npm ci
 COPY client client
 COPY server server
+# MSAL 로그인 설정은 Vite 빌드 시점에 번들로 들어가므로 build arg 로 주입한다.
+# (docker-compose.yml 의 build.args 에서 .env 값을 전달)
+ARG VITE_TEAMS_APP_CLIENT_ID
+ARG VITE_TEAMS_TENANT_ID
+ARG VITE_TEAMS_APP_ID_URI
+ENV VITE_TEAMS_APP_CLIENT_ID=$VITE_TEAMS_APP_CLIENT_ID \
+    VITE_TEAMS_TENANT_ID=$VITE_TEAMS_TENANT_ID \
+    VITE_TEAMS_APP_ID_URI=$VITE_TEAMS_APP_ID_URI
 RUN npm run build --workspace client
 
 FROM node:22-alpine
