@@ -105,6 +105,8 @@ function labelFor(f) {
  * @param {(params:{token:string,id:string})=>Promise<object>} [props.catchFish] - 낚시 API(테스트 주입, REQ-CATCH-001)
  * @param {()=>{id:string,x:number,y:number}[]} [props.getSpritePositions] - 입질 판정용 현재 물고기 위치 제공자(테스트 주입). 기본은 실시간 시뮬레이션 렌더 위치.
  * @param {()=>number} [props.rng] - 입질 확률 굴림용 난수원(테스트 주입, 기본 Math.random).
+ * @param {boolean} [props.fishing] - 낚시 모드 여부(기본 false). true 일 때만 낚시 UI/게임 루프/
+ *   캔버스 조준이 동작하고, 배경 위에 하늘+수면 레이어를 덧입힌다. false 면 순수 어항 감상 화면이다.
  */
 export default function FishTank({
   token,
@@ -116,6 +118,7 @@ export default function FishTank({
   catchFish = catchFishApi,
   getSpritePositions,
   rng = Math.random,
+  fishing = false,
 }) {
   const [state, dispatch] = useReducer(tankReducer, initialTankState);
   const [selectedId, setSelectedId] = useState(null); // 정보 조회 대상(REQ-INT-002)
@@ -317,7 +320,9 @@ export default function FishTank({
 
   // 게임 루프: 입질 판정(확률) + 예신→본신→도망 타이머. rAF(그리기)와 분리한 setInterval 로 돌려
   // 테스트에서 가짜 타이머로 결정적으로 구동한다. Date.now() 는 가짜 타이머에 함께 묶인다.
+  // 낚시 모드(fishing)일 때만 돌린다 — 공유 어항 감상 화면에서는 불필요한 타이머가 돌지 않는다.
   useEffect(() => {
+    if (!fishing) return undefined;
     const id = setInterval(() => {
       const g = gameRef.current;
       if (g.phase === CAST) {
@@ -340,7 +345,7 @@ export default function FishTank({
       }
     }, GAME_TICK_MS);
     return () => clearInterval(id);
-  }, [spritePositions, rng]);
+  }, [fishing, spritePositions, rng]);
 
   // 단계 전이에 따른 안내(던짐/예신/본신/도망). 건짐 성공 문구는 handleReel 의 API 응답에서 낸다.
   useEffect(() => {
@@ -516,7 +521,7 @@ export default function FishTank({
         aria-label="어항"
         role="img"
         aria-describedby="tank-canvas-desc"
-        onClick={handleCanvasClick}
+        onClick={fishing ? handleCanvasClick : undefined}
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
       />
       {/* 캔버스는 키보드로 조작할 수 없으므로, 아래 목록/버튼이 접근성 대체 수단이다(NFR-A11Y-001).
@@ -524,11 +529,59 @@ export default function FishTank({
       <p id="tank-canvas-desc" style={srOnly}>
         헤엄치는 물고기 그림입니다. 목록에서 각 물고기를 선택해 정보를 보거나,
         본인 물고기를 삭제하고, 먹이 주기 버튼으로 먹이를 줄 수 있어요.
-        낚싯대 던지기 버튼으로 찌를 던지고, 물고기가 입질하면 건져올리기 버튼으로 낚아 수집함에 담을 수 있어요.
+        {fishing &&
+          " 낚싯대 던지기 버튼으로 찌를 던지고, 물고기가 입질하면 건져올리기 버튼으로 낚아 수집함에 담을 수 있어요."}
       </p>
 
+      {/* 낚시 모드 배경 확장(장식): 화면 상단에 하늘+수면 레이어를 덧입힌다.
+          물고기 좌표계/유영 로직은 절대 바꾸지 않고(공유 어항과 동일 시뮬레이션),
+          이 레이어를 캔버스 위(z-index 2)에 얹어 수면 근처로 올라온 물고기가 자연스럽게
+          수면 위로 가려지게만 한다. 하늘은 위에서 아래로 서서히 투명해져(밴드 하단 = 수면)
+          경계가 부드럽고, 낚싯줄/찌 캐스팅이 과하게 가려지지 않도록 밴드 높이는 상단 20%로 둔다.
+          순수 시각 장식이라 스크린리더에는 숨긴다(aria-hidden). */}
+      {fishing && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: "20%",
+            pointerEvents: "none",
+            zIndex: 2,
+          }}
+        >
+          {/* 하늘 그라디언트: 밴드 하단에서 투명해져 수중 배경과 부드럽게 이어진다. */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: dark
+                ? "linear-gradient(to bottom, #0b1a2b 0%, #14344d 68%, rgba(20,52,77,0) 100%)"
+                : "linear-gradient(to bottom, #aee3ff 0%, #cdeeff 68%, rgba(205,238,255,0) 100%)",
+            }}
+          />
+          {/* 수면 하이라이트 라인: 하늘과 물의 경계를 살짝 반짝이게 한다. */}
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 6,
+              background: dark
+                ? "linear-gradient(to bottom, rgba(120,180,220,0.35), rgba(120,180,220,0))"
+                : "linear-gradient(to bottom, rgba(255,255,255,0.65), rgba(255,255,255,0))",
+            }}
+          />
+        </div>
+      )}
+
       {/* 하단 중앙 플로팅 컨트롤: 낚시 미니게임(던지기/건져올리기) + 안내 라이브 영역.
-          두 버튼 모두 실제 <button> 이라 키보드로 완전히 조작 가능하다(NFR-A11Y-001). */}
+          두 버튼 모두 실제 <button> 이라 키보드로 완전히 조작 가능하다(NFR-A11Y-001).
+          낚시 모드(fishing)일 때만 노출한다 — 공유 어항 감상 화면에는 낚시 UI가 없다. */}
+      {fishing && (
       <div
         role="group"
         aria-label="낚시"
@@ -606,6 +659,7 @@ export default function FishTank({
           </p>
         )}
       </div>
+      )}
 
       {/* 하단 우측 플로팅 컨트롤: 목록 패널(토글) + 목록/먹이 버튼 + 먹이 안내. */}
       <div

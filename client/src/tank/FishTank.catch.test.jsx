@@ -83,6 +83,7 @@ async function renderGame({ fishList = [], positions = [], catchImpl, rng } = {}
   render(
     <FishTank
       token="tok-abc"
+      fishing
       loadSnapshot={loadSnapshot}
       connect={connect}
       catchFish={catchFish}
@@ -279,6 +280,29 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     await advance(0);
     expect(catchFish).toHaveBeenCalledWith({ token: "tok-abc", id: "z" });
   });
+
+  it("fishing 미지정(공유 어항 감상 모드)이면 낚시 UI가 전혀 노출되지 않는다", async () => {
+    const { connect } = fakeConnect();
+    const loadSnapshot = vi.fn().mockResolvedValue([]);
+    render(
+      <FishTank
+        token="tok-abc"
+        loadSnapshot={loadSnapshot}
+        connect={connect}
+        getSpritePositions={() => []}
+      />,
+    );
+    await advance(0); // 초기 resync flush
+
+    // 낚싯대 던지기/건져올리기 버튼과 낚시 안내 영역이 모두 없어야 한다(순수 감상 화면).
+    expect(
+      screen.queryByRole("button", { name: "낚싯대 던지기" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "건져올리기" })).toBeNull();
+    expect(screen.queryByRole("status", { name: "낚시 안내" })).toBeNull();
+    // 어항 캔버스 자체는 감상 모드에서도 그대로 렌더된다.
+    expect(screen.getByLabelText("어항")).toBeInTheDocument();
+  });
 });
 
 // 키보드 조작은 실제 타이머 + userEvent 로 검증한다(가짜 타이머와 userEvent 는 교착).
@@ -290,6 +314,7 @@ describe("FishTank 낚시 키보드 접근성 (NFR-A11Y-001)", () => {
     render(
       <FishTank
         token="t"
+        fishing
         loadSnapshot={loadSnapshot}
         connect={connect}
         catchFish={vi.fn().mockResolvedValue({ alreadyCollected: false })}

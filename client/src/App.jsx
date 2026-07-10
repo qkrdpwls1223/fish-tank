@@ -124,9 +124,16 @@ export default function App({
         fontFamily: "system-ui, -apple-system, sans-serif",
       }}
     >
-      {/* 어항: 인증 완료 + 어항 뷰일 때 화면 전체 배경으로 채운다 (REQ-RT-004) */}
+      {/* 공유 어항(감상 전용): 인증 완료 + 어항 뷰일 때 화면 전체 배경으로 채운다 (REQ-RT-004).
+          낚시 UI/게임 루프는 fishing prop 미지정이라 동작하지 않는다. */}
       {state.status === "authenticated" && view === "tank" && (
         <FishTank token={token} {...tankProps} />
+      )}
+
+      {/* 낚시 모드: 공유 어항과 동일한 물고기 시뮬레이션 위에서 낚시 미니게임을 켜고
+          배경 상단에 하늘+수면 레이어를 덧입힌다(FishTank fishing). */}
+      {state.status === "authenticated" && view === "fishing" && (
+        <FishTank token={token} fishing {...tankProps} />
       )}
 
       {/* 내 수집함: 공유 어항과 분리된 별도 화면 (REQ-COLL-002) */}
@@ -155,6 +162,7 @@ export default function App({
         >
           {[
             { key: "tank", label: "공유 어항" },
+            { key: "fishing", label: "낚시" },
             { key: "collection", label: "내 수집함" },
             { key: "mytank", label: "내 어항" },
           ].map((v) => {
