@@ -71,6 +71,7 @@ export default function MyTank({
   const [fish, setFish] = useState([]);
   const [decor, setDecor] = useState([]);
   const [selected, setSelected] = useState(null); // { type:'fish'|'decor', id } | null
+  const [editing, setEditing] = useState(false); // 편집 모드(꺼짐=감상 전용). 기본은 꺼짐이라 편집 UI가 숨는다.
   const [message, setMessage] = useState("");
   const [announceCount, setAnnounceCount] = useState(0);
   const [size, setSize] = useState({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT });
@@ -212,13 +213,14 @@ export default function MyTank({
   // 방향키로 선택 항목을 미세 이동하고 새 위치를 저장한다(접근성 이동 경로, NFR-A11Y-001).
   const handleItemKeyDown = useCallback(
     (e, type, item) => {
+      if (!editing) return; // 편집 모드에서만 방향키 이동을 허용(목록은 편집 시에만 보이지만 일관성 유지).
       const delta = KEY_DELTA[e.key];
       if (!delta) return;
       e.preventDefault();
       applyMove(type, item.id, item.x + delta.dx, item.y + delta.dy, true);
       announce(`${labelFor(type, item)}을(를) 옮겼어요.`);
     },
-    [applyMove, announce],
+    [editing, applyMove, announce],
   );
 
   // 장식 추가: 기본 위치에 POST 하고, 서버가 준 장식을 목록에 더한 뒤 선택 상태로 만든다.
@@ -287,8 +289,10 @@ export default function MyTank({
   }, []);
 
   // 드래그 시작: 클릭 지점 근처의 장식(위) → 물고기 순으로 히트테스트해 하나를 잡는다.
+  // 편집 모드가 꺼져 있으면(감상 전용) 배치 변경을 막는다 — 항목을 잡지도 선택하지도 않는다.
   const handlePointerDown = useCallback(
     (e) => {
+      if (!editing) return;
       const { x, y } = toTankCoords(e);
       const hit = hitTest(x, y, decorRef.current, spritesRef.current);
       if (!hit) return;
@@ -296,7 +300,7 @@ export default function MyTank({
       setSelected(hit);
       e.currentTarget.setPointerCapture?.(e.pointerId);
     },
-    [toTankCoords],
+    [editing, toTankCoords],
   );
 
   // 드래그 중: 잡은 항목을 손끝 위치로 로컬 이동(서버 저장은 드롭 시 한 번).
@@ -322,6 +326,17 @@ export default function MyTank({
     },
     [toTankCoords, applyMove, announce],
   );
+
+  // 편집 모드 토글. 켜면 편집 UI(장식 팔레트·배치 목록)가 나타나고, 끄면 감상 전용으로 돌아간다.
+  // 끌 때는 선택도 해제해 다시 켰을 때 깔끔한 상태로 시작하게 한다.
+  const toggleEditing = useCallback(() => {
+    setEditing((prev) => {
+      const next = !prev;
+      if (!next) setSelected(null);
+      announce(next ? "편집 모드를 켰어요." : "편집 모드를 껐어요.");
+      return next;
+    });
+  }, [announce]);
 
   const isEmpty = status === "ready" && fish.length === 0 && decor.length === 0;
   // public/ 에서 서빙되는 배경 SVG(공유 어항과 동일 자산). 캔버스는 투명이라 위에 물고기/장식이 얹힌다.
@@ -363,8 +378,9 @@ export default function MyTank({
       />
       {/* 캔버스는 포인터 전용이므로 아래 목록/버튼 + 방향키 이동이 접근성 대체 수단이다(NFR-A11Y-001). */}
       <p id="my-tank-desc" style={srOnly}>
-        나만 보는 개인 어항입니다. 물고기 그리기로 물고기를 넣고, 장식 버튼으로 수초·바위·성을 놓을 수 있어요.
-        목록에서 항목을 선택한 뒤 방향키로 위치를 옮기거나, 삭제 버튼으로 지울 수 있어요.
+        나만 보는 개인 어항입니다. 기본은 감상 전용이고, 꾸미기 버튼으로 편집 모드를 켜면 꾸밀 수 있어요.
+        편집 모드에서는 장식 버튼으로 수초·바위·성을 놓고, 목록에서 항목을 선택한 뒤 방향키로 위치를 옮기거나
+        삭제 버튼으로 지울 수 있어요.
       </p>
 
       {status === "loading" && (
@@ -383,8 +399,8 @@ export default function MyTank({
         </p>
       )}
 
-      {/* 상단 중앙: 장식 팔레트. 각 종류를 실제 버튼으로 노출해 키보드로 조작 가능(NFR-A11Y-001). */}
-      {status === "ready" && (
+      {/* 상단 중앙: 장식 팔레트. 편집 모드에서만 노출. 각 종류를 실제 버튼으로 노출해 키보드로 조작 가능(NFR-A11Y-001). */}
+      {status === "ready" && editing && (
         <div
           role="group"
           aria-label="장식 추가"
@@ -424,13 +440,14 @@ export default function MyTank({
         </div>
       )}
 
-      {/* 하단 우측: 배치 목록(접근성 대체 수단). 항목 선택 → 방향키 이동 / 삭제. */}
-      {status === "ready" && (fish.length > 0 || decor.length > 0) && (
+      {/* 하단 우측: 배치 목록(편집 모드 전용, 접근성 대체 수단). 항목 선택 → 방향키 이동 / 삭제. */}
+      {/* 편집 토글 버튼 위에 얹히도록 bottom 을 올려 버튼과 겹치지 않게 한다. */}
+      {status === "ready" && editing && (fish.length > 0 || decor.length > 0) && (
         <div
           style={{
             position: "absolute",
             right: 16,
-            bottom: 20,
+            bottom: 64,
             zIndex: 6,
             width: "min(320px, 82vw)",
             maxHeight: "56vh",
@@ -481,6 +498,33 @@ export default function MyTank({
             ))}
           </ul>
         </div>
+      )}
+
+      {/* 하단 우측 고정: 편집 모드 토글. 항상 보이며(감상 중에도) aria-pressed 로 상태를 드러낸다. */}
+      {/* 배치 목록은 이 버튼 위(bottom:64)에 얹혀 겹치지 않는다. */}
+      {status === "ready" && (
+        <button
+          type="button"
+          aria-pressed={editing}
+          onClick={toggleEditing}
+          style={{
+            position: "absolute",
+            right: 16,
+            bottom: 20,
+            zIndex: 7,
+            border: "none",
+            borderRadius: 999,
+            padding: "10px 18px",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: "pointer",
+            background: editing ? colors.text : colors.primary,
+            color: colors.onPrimary,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.22)",
+          }}
+        >
+          {editing ? "편집 끝" : "꾸미기"}
+        </button>
       )}
 
       {/* 안내 라이브 영역. key 로 재마운트해 동일 문구도 재낭독한다(NFR-A11Y-001). */}

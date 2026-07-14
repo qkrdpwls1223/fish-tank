@@ -37,9 +37,67 @@ function deps(overrides = {}) {
   };
 }
 
+// 편집 모드를 켠다(기본은 꺼짐). 편집 UI(장식 팔레트·배치 목록)는 켠 뒤에만 나타난다.
+// 토글 버튼은 로드 완료(status === "ready") 후에 나타나므로 findByRole 로 기다린다.
+async function enableEditing() {
+  fireEvent.click(await screen.findByRole("button", { name: "꾸미기" }));
+}
+
 describe("MyTank", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("기본은 편집 모드가 꺼져 있어 장식 팔레트와 배치 목록이 화면에 없다", async () => {
+    const d = deps({
+      loadMyTank: vi.fn().mockResolvedValue({
+        fish: [fish("a")],
+        decor: [decorItem("d1", "rock")],
+      }),
+    });
+    render(<MyTank token="t" {...d} />);
+
+    // 로드가 끝나면 토글 버튼("꾸미기")은 보이지만, 편집 UI 는 아직 숨겨져 있다.
+    expect(await screen.findByRole("button", { name: "꾸미기" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "장식 추가" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "수초 넣기" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "물고기-a의 물고기" })).toBeNull();
+  });
+
+  it("편집 버튼을 누르면 장식 팔레트와 배치 목록이 나타난다", async () => {
+    const d = deps({
+      loadMyTank: vi.fn().mockResolvedValue({
+        fish: [fish("a")],
+        decor: [decorItem("d1", "rock")],
+      }),
+    });
+    render(<MyTank token="t" {...d} />);
+
+    await enableEditing();
+
+    // 팔레트(장식 추가 그룹)와 배치 목록 항목이 노출된다. 버튼 라벨도 "편집 끝"으로 바뀐다.
+    expect(screen.getByRole("group", { name: "장식 추가" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "물고기-a의 물고기" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "편집 끝" })).toBeInTheDocument();
+  });
+
+  it("편집 모드가 꺼져 있으면 캔버스 포인터다운으로 항목이 이동/선택되지 않는다", async () => {
+    const d = deps({
+      loadMyTank: vi.fn().mockResolvedValue({ fish: [], decor: [decorItem("d1", "rock")] }),
+    });
+    render(<MyTank token="tok-lock" {...d} />);
+
+    // 로드 완료를 기다린다(토글 버튼 등장).
+    await screen.findByRole("button", { name: "꾸미기" });
+    const canvas = screen.getByLabelText("내 어항 캔버스");
+    // 장식은 (50,50). 감상 전용이라 드래그해도 서버 저장이 일어나지 않는다.
+    fireEvent.pointerDown(canvas, { clientX: 50, clientY: 50, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 90, clientY: 120, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { clientX: 90, clientY: 120, pointerId: 1 });
+
+    expect(d.moveDecor).not.toHaveBeenCalled();
   });
 
   it("진입 시 내 어항을 로드해 물고기와 장식을 목록에 렌더링한다", async () => {
@@ -50,6 +108,7 @@ describe("MyTank", () => {
       }),
     });
     render(<MyTank token="t" {...d} />);
+    await enableEditing();
 
     // 물고기와 장식이 배치 목록에 나타난다(선택 버튼의 정확한 접근성 이름으로 조회).
     expect(
@@ -78,8 +137,9 @@ describe("MyTank", () => {
     const created = decorItem("d-seaweed", "seaweed", { x: 120, y: 220 });
     const d = deps({ createDecor: vi.fn().mockResolvedValue(created) });
     render(<MyTank token="tok-1" {...d} />);
+    await enableEditing();
 
-    // 빈 상태에서 팔레트 버튼이 노출된다.
+    // 편집 모드에서 팔레트 버튼이 노출된다(빈 상태에서도).
     const addSeaweed = await screen.findByRole("button", { name: "수초 넣기" });
     fireEvent.click(addSeaweed);
 
@@ -102,6 +162,7 @@ describe("MyTank", () => {
       loadMyTank: vi.fn().mockResolvedValue({ fish: [], decor: [decorItem("d1", "castle")] }),
     });
     render(<MyTank token="tok-2" {...d} />);
+    await enableEditing();
 
     const del = await screen.findByRole("button", { name: "성 삭제" });
     fireEvent.click(del);
@@ -117,6 +178,7 @@ describe("MyTank", () => {
       loadMyTank: vi.fn().mockResolvedValue({ fish: [fish("a")], decor: [] }),
     });
     render(<MyTank token="tok-3" {...d} />);
+    await enableEditing();
 
     const item = await screen.findByRole("button", { name: "물고기-a의 물고기" });
     fireEvent.click(item); // 선택
@@ -138,6 +200,7 @@ describe("MyTank", () => {
       loadMyTank: vi.fn().mockResolvedValue({ fish: [], decor: [decorItem("d1", "rock")] }),
     });
     render(<MyTank token="tok-4" {...d} />);
+    await enableEditing();
 
     await screen.findByRole("button", { name: "장식 · 바위" });
     const canvas = screen.getByLabelText("내 어항 캔버스");
@@ -161,6 +224,7 @@ describe("MyTank", () => {
       loadMyTank: vi.fn().mockResolvedValue({ fish: [fish("a")], decor: [] }),
     });
     render(<MyTank token="t" {...d} />);
+    await enableEditing();
 
     const item = await screen.findByRole("button", { name: "물고기-a의 물고기" });
     // 선택 전: 크기 버튼 없음.
@@ -181,6 +245,7 @@ describe("MyTank", () => {
       loadMyTank: vi.fn().mockResolvedValue({ fish: [fish("a", { scale: 1 })], decor: [] }),
     });
     render(<MyTank token="tok-5" {...d} />);
+    await enableEditing();
 
     const item = await screen.findByRole("button", { name: "물고기-a의 물고기" });
     fireEvent.click(item);
@@ -205,6 +270,7 @@ describe("MyTank", () => {
       loadMyTank: vi.fn().mockResolvedValue({ fish: [fish("a", { scale: 1 })], decor: [] }),
     });
     render(<MyTank token="tok-6" {...d} />);
+    await enableEditing();
 
     const item = await screen.findByRole("button", { name: "물고기-a의 물고기" });
     fireEvent.click(item);
@@ -225,6 +291,7 @@ describe("MyTank", () => {
       }),
     });
     render(<MyTank token="tok-7" {...d} />);
+    await enableEditing();
 
     const item = await screen.findByRole("button", { name: "장식 · 바위" });
     fireEvent.click(item);
@@ -250,6 +317,7 @@ describe("MyTank", () => {
       }),
     });
     render(<MyTank token="t" {...d} />);
+    await enableEditing();
 
     // 최대 크기 물고기 선택 → 크게 비활성화, 작게 활성화.
     fireEvent.click(await screen.findByRole("button", { name: "물고기-big의 물고기" }));
@@ -278,6 +346,7 @@ describe("MyTank", () => {
       }),
     });
     render(<MyTank token="t" {...d} />);
+    await enableEditing();
 
     expect(
       await screen.findByRole("button", { name: "익명의 물고기" }),
