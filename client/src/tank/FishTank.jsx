@@ -811,6 +811,42 @@ export default function FishTank({
           </button>
         </div>
 
+        {/* 조작키 가이드(시각 안내). 키보드 조작법을 화면에 노출한다. 스크린리더에는
+            위 캔버스 설명(tank-canvas-desc)이 이미 안내하므로 여기서는 중복 낭독을 피해 aria-hidden. */}
+        <div
+          aria-hidden="true"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "center",
+            gap: 6,
+            fontSize: 12,
+            color: "#fff",
+          }}
+        >
+          {[
+            { keys: "A / D  또는  ← / →", desc: "배 이동" },
+            { keys: "스페이스바", desc: "던지기 · 챔질" },
+          ].map((g) => (
+            <span
+              key={g.desc}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "4px 10px",
+                borderRadius: 999,
+                background: "rgba(0,0,0,0.38)",
+                backdropFilter: "blur(2px)",
+                textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+              }}
+            >
+              <strong style={{ fontWeight: 700 }}>{g.keys}</strong>
+              <span style={{ opacity: 0.85 }}>{g.desc}</span>
+            </span>
+          ))}
+        </div>
+
         {/* 낚시 안내 라이브 영역. key 로 재마운트해 동일 문구도 재낭독한다(NFR-A11Y-001). */}
         {catchMessage && (
           <p
