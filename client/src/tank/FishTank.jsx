@@ -62,6 +62,29 @@ const IDLE_BOB_SPEED = 1.8;
 // @MX:NOTE: [AUTO] 예신(nibble) 시 찌가 톡톡 떨리는 진폭(px). 본신 전 전조 신호.
 const NIBBLE_TREMBLE = 3;
 
+// @MX:NOTE: [AUTO] 수면(하늘/수면 밴드) 높이 비율. 밴드 CSS height "20%"와 동일해야 배가 수면에 얹힌다.
+const SURFACE_RATIO = 0.2;
+// @MX:NOTE: [AUTO] 낚싯대 끝(rodTip=낚싯줄 시작점)의 우측 여백(px). 배/낚시꾼과 이 값을 공유해
+//   창 크기가 바뀌어도 낚싯줄이 낚시꾼 손끝(낚싯대 끝)에 정확히 붙게 한다.
+const ROD_TIP_MARGIN_RIGHT = 46;
+// @MX:NOTE: [AUTO] 낚싯대 끝을 수면보다 이만큼 위에 둔다(px). 줄이 수면 위 낚싯대 끝에서 시작해
+//   수면을 지나 수중 찌로 내려가는 연결감을 만든다.
+const ROD_TIP_ABOVE_SURFACE = 12;
+
+// @MX:NOTE: [AUTO] 방향키(←/→) 또는 A/D 한 번에 배가 좌우로 움직이는 거리(px). 키보드만으로 조준 가능하게 한다.
+const BOAT_KEY_STEP = 28;
+// @MX:NOTE: [AUTO] 배(rodTip.x 기준)가 화면 좌/우 가장자리에서 유지하는 최소 여백(px).
+//   우측 여백을 ROD_TIP_MARGIN_RIGHT 와 같게 두어, 이동 전 기본 위치가 기존 고정 위치와 동일해진다.
+const BOAT_EDGE_MARGIN_LEFT = 16;
+const BOAT_EDGE_MARGIN_RIGHT = ROD_TIP_MARGIN_RIGHT;
+
+// 배(수면 위 낚시꾼)의 수평 위치를 화면 안으로 제한한다. 인자/반환은 rodTip.x(낚싯줄 시작점) 기준이며,
+// 선체가 좌우로 화면 밖으로 빠져나가지 않도록 클램프한다. 배·rodTip·낚싯줄이 모두 이 x 를 공유한다.
+function clampBoatX(x, width) {
+  const max = Math.max(BOAT_EDGE_MARGIN_LEFT, width - BOAT_EDGE_MARGIN_RIGHT);
+  return Math.max(BOAT_EDGE_MARGIN_LEFT, Math.min(max, x));
+}
+
 // 기본 스냅샷 로더는 모듈 스코프에 두어 참조를 고정한다. 컴포넌트 안에서 인라인 화살표로
 // 기본값을 주면 매 렌더마다 새 함수가 생겨 resync → 마운트 useEffect 가 재실행되고,
 // WS 연결이 끊겼다 붙기를 반복하며 GET /api/fish 가 무한 재요청되는 루프가 생긴다.
@@ -136,6 +159,9 @@ export default function FishTank({
   const [listOpen, setListOpen] = useState(false); // 물고기 목록 패널 토글(기본 닫힘)
   const [dark, setDark] = useState(false); // 어항 배경 라이트/다크 선택
   const [size, setSize] = useState({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT });
+  // 낚시 배의 수평 위치(rodTip.x = 낚싯줄 시작점 기준). null 이면 기본(우측) 위치를 쓴다.
+  // 방향키/드래그로 바꾸며, 배와 rodTip·낚싯줄이 모두 이 값을 공유해 함께 움직인다(낚시 모드 전용).
+  const [boatX, setBoatX] = useState(null);
 
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
@@ -147,11 +173,20 @@ export default function FishTank({
   // 게임 루프(setInterval)와 rAF 그리기가 최신 게임 상태를 리렌더 없이 읽도록 미러링한다.
   const gameRef = useRef(game);
   gameRef.current = game;
+  // rAF 그리기 루프와 이벤트 핸들러(캐스트/드래그)가 리렌더 없이 현재 배 x 를 읽도록 미러링한다.
+  const boatXRef = useRef(null);
+  // 배 포인터 드래그 진행 여부(마우스/터치). true 인 동안 pointermove 로 배 x 를 갱신한다.
+  const boatDragRef = useRef(false);
   // 찌 반경 안에 "현재 들어와 있는" 물고기 id 집합. 새로 진입한 물고기만 입질 확률을 굴리기 위해
   // 이전 틱의 집합과 비교한다(같은 물고기를 매 틱 재굴림하지 않도록, BITE_CHANCE).
   const zoneRef = useRef(new Set());
   // 체류 물고기 상시 재굴림(rollResidentBiter)의 마지막 굴림 시각(ms). 캐스트 밖에서는 null 로 리셋.
   const residentRollRef = useRef(null);
+  // 이번 입질에 이미 챔질(REEL+catchFish)이 시작됐는지 나타내는 동기 가드. gameRef.current 는 리렌더
+  // 시점에만 갱신되므로, 스페이스 오토리핏/버튼 연타가 리렌더 전에 겹치면 phase 가 아직 BITING 으로 보여
+  // catchFish 가 이중 호출될 여지가 있다. 이 ref 를 handleReel 진입 시 즉시 true 로 올려 재진입을 막고,
+  // idle 로 복귀할 때만 false 로 되돌린다(다음 캐스트 준비).
+  const reelingRef = useRef(false);
 
   // OS 다크 모드에 따라 어항 배경 이미지를 전환한다. jsdom 등 matchMedia 미지원 시 라이트 유지.
   useEffect(() => {
@@ -273,29 +308,54 @@ export default function FishTank({
     }));
   }, [getSpritePositions]);
 
-  // 낚싯대 던지기 (REQ-CATCH-001 게임 진입). target 이 있으면 그 지점(캔버스 클릭 조준),
-  // 없으면 어항 중앙 수면 근처로 던진다(버튼 = 조준 불필요한 접근성 경로, NFR-A11Y-001).
-  const handleCast = useCallback((target) => {
+  // 낚싯대 던지기 (REQ-CATCH-001 게임 진입). 조준은 배 위치로만 결정된다 — 찌를 배(낚시꾼 손)
+  // 바로 아래로 수직 낙하시킨다. x 는 현재 배 x(=rodTip.x), y 는 수면 아래 목표 지점(어항 중앙 깊이).
+  // 버튼/스페이스 어느 경로로 던져도 배 아래 수직으로 나간다(NFR-A11Y-001, 조준 불필요).
+  const handleCast = useCallback(() => {
     if (gameRef.current.phase !== IDLE) return; // 찌는 한 번에 하나
     const bounds = boundsRef.current;
-    const pos = target ?? { x: bounds.width / 2, y: bounds.height / 2 };
-    dispatchGame({ type: "CAST", x: pos.x, y: pos.y, now: Date.now() });
+    dispatchGame({
+      type: "CAST",
+      x: boatXRef.current, // 배 바로 아래(수직)
+      y: bounds.height / 2,
+      now: Date.now(),
+    });
   }, []);
 
-  // 캔버스 클릭 조준(선택적 향상). 대기 상태에서만 클릭 지점으로 던진다.
-  const handleCanvasClick = useCallback(
+  // 컨테이너 픽셀 좌표계에서의 현재 포인터 x. 캔버스/오버레이는 CSS 로 100% 늘어나므로
+  // 표시 크기 대비 내부(bounds) 좌표계로 환산한다(캔버스 클릭 조준과 동일한 스케일 처리).
+  const pointerToBoundsX = useCallback((clientX) => {
+    const el = containerRef.current;
+    if (!el) return clientX;
+    const rect = el.getBoundingClientRect();
+    const scaleX = rect.width ? boundsRef.current.width / rect.width : 1;
+    return (clientX - rect.left) * scaleX;
+  }, []);
+
+  // 배 드래그 시작(마우스/터치). 던진 상태(찌가 물에 있음)에는 배 이동을 잠근다 — IDLE 에서만 잡힌다.
+  const handleBoatPointerDown = useCallback((e) => {
+    if (gameRef.current.phase !== IDLE) return;
+    boatDragRef.current = true;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    e.preventDefault(); // 드래그 중 페이지 선택/스크롤 방지
+  }, []);
+
+  // 배 드래그 이동: 선체 중심이 포인터를 따라오도록 x 를 갱신한다(rodTip.x = 중심 bx - 30).
+  const handleBoatPointerMove = useCallback(
     (e) => {
-      if (gameRef.current.phase !== IDLE) return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      // 캔버스는 CSS 로 100% 늘어나므로 표시 크기 대비 내부 좌표계로 환산한다.
-      const scaleX = rect.width ? boundsRef.current.width / rect.width : 1;
-      const scaleY = rect.height ? boundsRef.current.height / rect.height : 1;
-      const x = (e.clientX - rect.left) * scaleX;
-      const y = (e.clientY - rect.top) * scaleY;
-      handleCast({ x, y });
+      if (!boatDragRef.current) return;
+      const cx = pointerToBoundsX(e.clientX);
+      setBoatX(clampBoatX(cx - 30, boundsRef.current.width));
     },
-    [handleCast],
+    [pointerToBoundsX],
   );
+
+  // 배 드래그 종료: 포인터 캡처를 놓고 드래그 상태를 해제한다.
+  const handleBoatPointerUp = useCallback((e) => {
+    if (!boatDragRef.current) return;
+    boatDragRef.current = false;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+  }, []);
 
   // 건져올리기 (REQ-CATCH-001). 입질 중(타이밍 창 안)일 때만 성공한다. 성공 시 물고기의 원본 ID로
   // catch API 를 호출해 개인 수집함에 담는다. [CRITICAL] 비파괴(REQ-CATCH-003): 어항 상태(state.fish)를
@@ -303,6 +363,10 @@ export default function FishTank({
   const handleReel = useCallback(() => {
     const g = gameRef.current;
     if (g.phase !== BITING || !g.biterId) return; // 타이밍을 놓치면 헛챔질
+    // 동기 가드: 리렌더로 phase 가 CAUGHT 로 갱신되기 전에 스페이스 오토리핏/연타가 겹쳐도
+    // catchFish 가 두 번 호출되지 않게 한다(idle 복귀 시 reelingRef 를 되돌린다).
+    if (reelingRef.current) return;
+    reelingRef.current = true;
     const biterId = g.biterId;
     dispatchGame({ type: "REEL", now: Date.now() }); // biting → caught (끌어올리기 모션 시작)
     catchFish({ token, id: biterId })
@@ -364,15 +428,31 @@ export default function FishTank({
   // 버튼으로 커서를 옮기는 지연 없이 "지금!" 타이밍에 바로 챔질할 수 있게 하는 게 핵심.
   // 낚시 모드(fishing)일 때만 등록/해제한다. 입력 요소 포커스 시에는 무시하고, 스크롤/버튼 더블트리거를
   // 막기 위해 preventDefault 한다. 기존 던지기/건져올리기 버튼(접근성 경로)은 그대로 유지된다.
+  // 방향키(←/→) 또는 A/D 로 배 좌우 이동, 스페이스로 던지기/챔질을 함께 처리한다(키보드만으로 완전 조작).
   useEffect(() => {
     if (!fishing) return undefined;
     const onKeyDown = (e) => {
-      if (e.key !== " " && e.code !== "Space") return;
       const el = e.target;
       const tag = el?.tagName;
-      // 입력 중(텍스트 입력/편집 영역)에는 스페이스가 게임 조작을 가로채지 않게 한다.
+      // 입력 중(텍스트 입력/편집 영역)에는 게임/이동 조작을 가로채지 않게 한다.
       if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
       const phase = gameRef.current.phase;
+      // ←/→ 또는 A/D: 배 좌우 이동. 던진 상태(찌가 물에 있음)에는 이동을 잠근다 — IDLE 에서만 움직인다.
+      const lowerKey = typeof e.key === "string" ? e.key.toLowerCase() : "";
+      const moveLeft = e.key === "ArrowLeft" || lowerKey === "a";
+      const moveRight = e.key === "ArrowRight" || lowerKey === "d";
+      if (moveLeft || moveRight) {
+        if (phase !== IDLE) return;
+        e.preventDefault(); // 페이지 좌우 스크롤 방지
+        const dir = moveLeft ? -1 : 1;
+        setBoatX((prev) => {
+          const base = prev == null ? boatXRef.current : prev;
+          return clampBoatX(base + dir * BOAT_KEY_STEP, boundsRef.current.width);
+        });
+        return;
+      }
+      // 스페이스: 대기 중이면 던지고, 본신(챔질 창)이면 즉시 건져올린다.
+      if (e.key !== " " && e.code !== "Space") return;
       if (phase === IDLE) {
         e.preventDefault();
         handleCast();
@@ -434,9 +514,19 @@ export default function FishTank({
     return () => clearTimeout(t);
   }, [game.phase]);
 
+  // idle 로 복귀하면 챔질 동기 가드를 되돌려 다음 입질에 다시 챔질할 수 있게 한다(이중호출 방지 리셋).
+  useEffect(() => {
+    if (game.phase === IDLE) reelingRef.current = false;
+  }, [game.phase]);
+
   // 선택된 물고기 정보(REQ-INT-002). 삭제 등으로 사라지면 패널도 자동으로 닫힌다.
   const selectedFish = state.fish.find((f) => f.id === selectedId) ?? null;
   const selectedInfo = selectedFish ? fishInfo(selectedFish) : null;
+
+  // 배의 현재 실효 x(이동 반영 + 현재 창 크기로 클램프). 미이동(null)이면 기존 고정 위치(우측)를 쓴다.
+  // rAF 그리기 루프(boatXRef)와 SVG/드래그 오버레이(effectiveBoatX)가 같은 값을 공유해 함께 움직인다.
+  const effectiveBoatX = clampBoatX(boatX ?? size.width - ROD_TIP_MARGIN_RIGHT, size.width);
+  boatXRef.current = effectiveBoatX;
 
   // 물고기 목록이 바뀌면 스프라이트 맵을 조정한다(추가 스폰/삭제 정리).
   useEffect(() => {
@@ -498,6 +588,7 @@ export default function FishTank({
         gameRef.current,
         ripplesRef.current,
         spriteCacheRef.current,
+        boatXRef.current, // 낚싯줄 시작점(rodTip.x)이 배를 따라가도록 현재 배 x 를 넘긴다
       );
       raf = requestAnimationFrame(frame);
     };
@@ -570,16 +661,16 @@ export default function FishTank({
         aria-label="어항"
         role="img"
         aria-describedby="tank-canvas-desc"
-        onClick={fishing ? handleCanvasClick : undefined}
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
       />
       {/* 캔버스는 키보드로 조작할 수 없으므로, 아래 목록/버튼이 접근성 대체 수단이다(NFR-A11Y-001).
-          낚시도 캔버스 조준(클릭)은 마우스 전용 향상일 뿐, '낚싯대 던지기'/'건져올리기' 버튼으로 완전히 조작 가능하다. */}
+          낚시는 방향키(←/→)로 배를 옮기고 스페이스/버튼으로 던지므로 키보드만으로 완전히 조작 가능하다.
+          배 드래그(마우스/터치)는 조준을 돕는 향상일 뿐이다. */}
       <p id="tank-canvas-desc" style={srOnly}>
         헤엄치는 물고기 그림입니다. 목록에서 각 물고기를 선택해 정보를 보거나,
         본인 물고기를 삭제하고, 먹이 주기 버튼으로 먹이를 줄 수 있어요.
         {fishing &&
-          " 낚싯대 던지기 버튼으로 찌를 던지고, 물고기가 입질하면 건져올리기 버튼으로 낚아 수집함에 담을 수 있어요. 스페이스바로도 던지고, 입질(찌가 쑥 들어간 순간) 때 스페이스바를 누르면 바로 챔질할 수 있어요."}
+          " 왼쪽/오른쪽 방향키나 A/D 키로 배를 좌우로 움직여 물고기 위로 옮긴 뒤, 낚싯대 던지기 버튼이나 스페이스바로 찌를 배 바로 아래에 던지세요. 물고기가 입질하면 건져올리기 버튼으로 낚아 수집함에 담을 수 있어요. 입질(찌가 쑥 들어간 순간) 때 스페이스바를 누르면 바로 챔질할 수 있어요."}
       </p>
 
       {/* 낚시 모드 배경 확장(장식): 화면 상단에 하늘+수면 레이어를 덧입힌다.
@@ -625,6 +716,38 @@ export default function FishTank({
             }}
           />
         </div>
+      )}
+
+      {/* 수면 위 배 + 낚시꾼(장식). 낚싯대 끝을 rodTip 과 같은 좌표로 두어, 캔버스(z≈0)에 그려지는
+          낚싯줄이 낚시꾼 손끝에서 시작하는 것처럼 이어진다. 하늘/수면 밴드(z2)와 컨트롤(z5) 사이(z3)에
+          얹어 낚싯줄의 수면 위 구간(손끝 근처)을 배/낚시꾼이 살짝 가린다. 낚시 모드에서만 노출한다. */}
+      {fishing && (
+        <FishermanBoat width={size.width} height={size.height} dark={dark} boatX={effectiveBoatX} />
+      )}
+
+      {/* 배 드래그 히트 영역(마우스/터치 향상). 배 SVG 는 pointerEvents:none 이라 이 투명 오버레이가
+          포인터를 받아 배를 좌우로 잡아끈다. 배 위(z3)·컨트롤(z5) 사이(z4)에 얹는다.
+          던진 상태(찌가 물에 있음)에는 이동을 잠그려 pointerEvents 를 끈다(IDLE 에서만 잡힌다).
+          순수 조작용이라 스크린리더에는 숨긴다(키보드는 방향키로 대체 — NFR-A11Y-001). */}
+      {fishing && (
+        <div
+          data-testid="boat-drag-handle"
+          aria-hidden="true"
+          onPointerDown={handleBoatPointerDown}
+          onPointerMove={handleBoatPointerMove}
+          onPointerUp={handleBoatPointerUp}
+          style={{
+            position: "absolute",
+            left: effectiveBoatX - 20,
+            top: size.height * SURFACE_RATIO - 46,
+            width: 100,
+            height: 80,
+            zIndex: 4,
+            cursor: "grab",
+            touchAction: "none",
+            pointerEvents: game.phase === IDLE ? "auto" : "none",
+          }}
+        />
       )}
 
       {/* 하단 중앙 플로팅 컨트롤: 낚시 미니게임(던지기/건져올리기) + 안내 라이브 영역.
@@ -880,13 +1003,127 @@ export default function FishTank({
   );
 }
 
-// 어항 좌상단 기준 낚싯대 끝(rod tip) 위치. 우상단 모서리 근처에 고정한다(바닥 중앙 캐스트 버튼과 대비).
-function rodTip(bounds) {
-  return { x: bounds.width - 24, y: 12 };
+// 낚싯줄이 시작되는 낚싯대 끝(rod tip) 위치. 화면 상단 우측 수면 위 — 배 위 낚시꾼이 든
+// 낚싯대의 끝 지점이다. 배/낚시꾼 SVG 레이어(FishermanBoat)와 같은 bounds·상수(SURFACE_RATIO,
+// ROD_TIP_MARGIN_RIGHT, ROD_TIP_ABOVE_SURFACE)로 계산하므로, 창 크기가 바뀌어도 낚싯줄이
+// 낚시꾼 손끝에 붙는다. 여기서 반환하는 좌표는 캔버스 좌표계(= 컨테이너 픽셀, 1:1)이다.
+// @MX:ANCHOR: [AUTO] 낚싯줄 시작점 계약 — drawBobber(낚싯줄 렌더)와 FishermanBoat(배/낚시꾼 SVG)가
+//   이 함수로 같은 지점을 공유해 손끝-줄 연결을 유지한다.
+// @MX:REASON: 두 렌더 경로(캔버스 낚싯줄 + SVG 낚시꾼)가 반드시 같은 좌표를 써야 시각적 연결이 깨지지 않는다.
+function rodTip(bounds, boatX) {
+  const surfaceY = bounds.height * SURFACE_RATIO;
+  const x = clampBoatX(boatX == null ? bounds.width - ROD_TIP_MARGIN_RIGHT : boatX, bounds.width);
+  return { x, y: surfaceY - ROD_TIP_ABOVE_SURFACE };
+}
+
+// 수면에 떠 있는 배 + 낚시꾼(순수 시각 장식). SVG 벡터로 그려 앱 팔레트/라이트·다크와 어울리는
+// 귀엽고 단순한 톤을 낸다. 낚싯대 끝을 rodTip 과 같은 bounds·상수로 계산하므로, 캔버스에 그려지는
+// 낚싯줄이 이 낚시꾼의 손끝(낚싯대 끝)에서 시작하는 것처럼 이어진다(창 크기가 바뀌어도 유지).
+// viewBox 를 컨테이너 픽셀 크기와 1:1 로 맞춰 절대 좌표로 그린다(캔버스 좌표계와 동일).
+// 물결에 살짝 흔들리는 보빙 애니메이션을 넣되, prefers-reduced-motion 이면 정지한다(NFR-A11Y).
+function FishermanBoat({ width, height, dark, boatX }) {
+  const rt = rodTip({ width, height }, boatX); // 낚싯대 끝(= 낚싯줄 시작점). 배 x 를 공유해 함께 움직인다.
+  const surfaceY = height * SURFACE_RATIO;
+  const bx = rt.x + 30; // 선체 중심 x(낚싯대 끝의 오른쪽 아래)
+  const by = surfaceY; // 선체가 얹히는 수면 라인 y
+
+  // 낚시꾼 각 부위 기준점(선체 왼쪽에 앉아 왼쪽 수면으로 낚싯대를 드리운다).
+  const headCx = bx - 12;
+  const headCy = by - 33;
+  const handX = bx - 16;
+  const handY = by - 18;
+
+  // 라이트/다크 팔레트: 나무 선체 + 재킷(앱 primary 계열) + 밝은 피부 + 챙모자.
+  const pal = dark
+    ? { hull: "#7c4a1e", rim: "#a9702f", jacket: "#2b4a8a", skin: "#d9b48c", hat: "#8a2f2f", rod: "#5a3a1e" }
+    : { hull: "#b5651d", rim: "#d98a3b", jacket: colors.primary, skin: "#f2c8a0", hat: "#c0392b", rod: "#6b4226" };
+
+  return (
+    <svg
+      data-testid="fishing-boat"
+      aria-hidden="true"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        pointerEvents: "none",
+        zIndex: 3,
+      }}
+    >
+      <style>{`
+        @keyframes fisherBob {
+          0%, 100% { transform: translateY(0) rotate(-1.2deg); }
+          50% { transform: translateY(3px) rotate(1.2deg); }
+        }
+        .fisher-boat-group {
+          animation: fisherBob 3.6s ease-in-out infinite;
+          transform-box: fill-box;
+          transform-origin: center;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .fisher-boat-group { animation: none; }
+        }
+      `}</style>
+      <g className="fisher-boat-group">
+        {/* 선체(둥근 사다리꼴) */}
+        <path
+          d={`M ${bx - 42} ${by} Q ${bx} ${by + 4} ${bx + 42} ${by} L ${bx + 30} ${by + 16} Q ${bx} ${by + 22} ${bx - 30} ${by + 16} Z`}
+          fill={pal.hull}
+          stroke={pal.rim}
+          strokeWidth="1.5"
+        />
+        {/* 갑판 림(수면에 얹힌 윗선) */}
+        <path
+          d={`M ${bx - 42} ${by} Q ${bx} ${by + 4} ${bx + 42} ${by}`}
+          fill="none"
+          stroke={pal.rim}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+        />
+        {/* 낚시꾼 몸통(재킷) */}
+        <path
+          d={`M ${headCx - 7} ${by - 2} Q ${headCx} ${by - 26} ${headCx + 7} ${by - 2} Z`}
+          fill={pal.jacket}
+        />
+        {/* 팔: 어깨 → 손(낚싯대 손잡이) */}
+        <line
+          x1={headCx + 2}
+          y1={by - 18}
+          x2={handX}
+          y2={handY}
+          stroke={pal.jacket}
+          strokeWidth="4"
+          strokeLinecap="round"
+        />
+        {/* 머리 */}
+        <circle cx={headCx} cy={headCy} r="7" fill={pal.skin} />
+        {/* 챙모자 */}
+        <path
+          d={`M ${headCx - 9} ${headCy - 3} Q ${headCx} ${headCy - 12} ${headCx + 9} ${headCy - 3} Z`}
+          fill={pal.hat}
+        />
+        <rect x={headCx - 11} y={headCy - 3} width="22" height="3" rx="1.5" fill={pal.hat} />
+        {/* 낚싯대: 손 → 낚싯대 끝(rodTip). 캔버스 낚싯줄이 정확히 이 끝에서 이어진다. */}
+        <line
+          x1={handX}
+          y1={handY}
+          x2={rt.x}
+          y2={rt.y}
+          stroke={pal.rod}
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </g>
+    </svg>
+  );
 }
 
 // 캔버스에 먹이와 스프라이트를 그린다. 2D 컨텍스트 미지원(jsdom) 환경에서는 무시한다.
-function drawTank(canvas, sprites, bounds, now, foods = [], game = null, ripples = [], cache = null) {
+function drawTank(canvas, sprites, bounds, now, foods = [], game = null, ripples = [], cache = null, boatX = null) {
   if (!canvas) return;
   let ctx = null;
   try {
@@ -907,7 +1144,7 @@ function drawTank(canvas, sprites, bounds, now, foods = [], game = null, ripples
     drawFishSprite(ctx, sprite, now, cache);
   }
   if (game && game.bobber) {
-    drawBobber(ctx, game, now, bounds);
+    drawBobber(ctx, game, now, bounds, boatX);
   }
 }
 
@@ -1008,9 +1245,9 @@ function bobberScreenPos(game, now, bounds) {
 }
 
 // 찌(bobber)와 낚싯대 끝→찌 낚싯줄을 그린다. 단계별 위치는 bobberScreenPos 가 계산한다.
-function drawBobber(ctx, game, now, bounds) {
+function drawBobber(ctx, game, now, bounds, boatX = null) {
   const pos = bobberScreenPos(game, now, bounds);
-  const tip = rodTip(bounds);
+  const tip = rodTip(bounds, boatX);
   const biting = game.phase === BITING;
   const r = biting ? 8 : 6;
 

@@ -12,8 +12,11 @@ import { BITE_WINDOW_MS } from "./fishingGame.js";
 // 게임 루프/타이머는 setInterval + Date 기반이라 가짜 타이머로 결정적으로 구동한다.
 // 상호작용은 fireEvent(동기)로 한다 — React18 + 가짜 타이머 + userEvent 조합은 교착에 빠진다.
 
-// 기본 낚싯대 던지기 버튼은 어항 중앙(기본 800x450 → 400,225)으로 던진다.
-const CENTER = { x: 400, y: 225 };
+// 던지기는 배(낚시꾼) 바로 아래로 수직 낙하한다. 배 기본 위치 = width - ROD_TIP_MARGIN_RIGHT(=46),
+// 기본 800x450 에서는 x=754. 던지기 y 는 어항 중앙 깊이(height/2=225). 입질 대상은 이 지점에 둔다.
+const UNDER_BOAT = { x: 754, y: 225 };
+// 방향키 한 번에 배가 움직이는 거리(FishTank BOAT_KEY_STEP 와 동일).
+const BOAT_KEY_STEP = 28;
 
 function fish(id, extra = {}) {
   return {
@@ -116,7 +119,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
   });
 
   it("입질은 예신(톡톡) → 본신(쑥) 2단계로 오고, 본신에서만 건져올리기가 활성화된다 (REQ-CATCH-001, NFR-A11Y-001)", async () => {
-    await renderGame({ positions: [{ id: "a", x: CENTER.x, y: CENTER.y }] });
+    await renderGame({ positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }] });
 
     fireEvent.click(castBtn());
 
@@ -134,7 +137,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
   it("확률 굴림에 실패하면 물고기가 그냥 스쳐 지나가 입질이 오지 않고, 같은 물고기를 매 틱 재굴림하지 않는다 (BITE_CHANCE)", async () => {
     // rng=0.99 는 BITE_CHANCE(0.5) 굴림을 항상 실패시킨다 → 입질 없음.
     await renderGame({
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
       rng: () => 0.99,
     });
 
@@ -148,7 +151,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
 
   it("입질 중 건져올리기를 누르면 catchFish 를 토큰과 입질 물고기 id 로 호출하고 성공을 안내한다 (NFR-SEC-001)", async () => {
     const { catchFish } = await renderGame({
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
     });
 
     fireEvent.click(castBtn());
@@ -162,7 +165,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
 
   it("이미 수집한 물고기(alreadyCollected)면 '이미 수집함에 있어요'로 안내한다 (REQ-CATCH-005)", async () => {
     await renderGame({
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
       catchImpl: vi.fn().mockResolvedValue({ id: "c", alreadyCollected: true }),
     });
 
@@ -178,7 +181,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     const err = new Error("gone");
     err.code = "not_found";
     await renderGame({
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
       catchImpl: vi.fn().mockRejectedValue(err),
     });
 
@@ -192,7 +195,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
 
   it("타이밍 창을 놓치면 미끼만 먹고 도망가고 catchFish 는 호출되지 않는다 (미끼만 먹고 튐)", async () => {
     const { catchFish } = await renderGame({
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
     });
 
     fireEvent.click(castBtn());
@@ -211,7 +214,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
   it("낚아도(건짐) 원본 물고기는 어항 목록에 그대로 남는다 — 비파괴 (REQ-CATCH-003)", async () => {
     await renderGame({
       fishList: [fish("a"), fish("b")],
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
     });
 
     fireEvent.click(castBtn());
@@ -229,7 +232,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
   it("도망 뒤에도 원본 물고기는 어항 목록에 그대로 남는다 — 비파괴 (REQ-CATCH-003)", async () => {
     await renderGame({
       fishList: [fish("a")],
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
     });
 
     fireEvent.click(castBtn());
@@ -243,7 +246,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
 
   it("낚시는 실시간 채널로 어떤 이벤트도 보내지 않는다 — 브로드캐스트 없음 (REQ-PRIV-002)", async () => {
     const { send } = await renderGame({
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
     });
 
     fireEvent.click(castBtn());
@@ -255,7 +258,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
   });
 
   it("건짐/도망 연출 후 찌가 걷히고 다시 던질 수 있다 (idle 복귀)", async () => {
-    await renderGame({ positions: [{ id: "a", x: CENTER.x, y: CENTER.y }] });
+    await renderGame({ positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }] });
 
     fireEvent.click(castBtn());
     await advanceToStrike();
@@ -266,24 +269,21 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     expect(castBtn()).toBeEnabled();
   });
 
-  it("캔버스 클릭으로 조준해 던질 수 있다(마우스 향상 경로) — 클릭 지점 물고기가 입질한다", async () => {
-    const { catchFish } = await renderGame({
-      // 클릭 조준 지점(300,150)에 물고기를 둔다. jsdom getBoundingClientRect 는 0 이므로 client 좌표 그대로.
-      positions: [{ id: "z", x: 300, y: 150 }],
-    });
+  it("캔버스 클릭은 더 이상 던지지 않는다 — 조준 제거(수직 캐스트 전환)", async () => {
+    await renderGame({ positions: [{ id: "z", x: 300, y: 150 }] });
 
+    // 예전 클릭 조준 경로. 이제는 아무 일도 일어나지 않아 던지기 버튼이 계속 활성이어야 한다.
     fireEvent.click(screen.getByLabelText("어항"), { clientX: 300, clientY: 150 });
-    await advanceToStrike();
-
-    expect(reelBtn()).toBeEnabled();
-    fireEvent.click(reelBtn());
     await advance(0);
-    expect(catchFish).toHaveBeenCalledWith({ token: "tok-abc", id: "z" });
+
+    expect(castBtn()).toBeEnabled();
+    // 던지지 않았으므로 안내 라이브 영역 자체가 아직 렌더되지 않는다(문구 없음).
+    expect(screen.queryByRole("status", { name: "낚시 안내" })).toBeNull();
   });
 
   it("스페이스바로 던지고, 본신에서 스페이스바로 즉시 챔질한다 (NFR-A11Y-001)", async () => {
     const { catchFish } = await renderGame({
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
     });
 
     // 대기(idle) 중 스페이스바 → 던지기.
@@ -317,7 +317,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
   });
 
   it("예신 단계에서 스페이스바는 헛챔질(무시)이라 도망시키지 않는다 — 본신에서만 챔질", async () => {
-    await renderGame({ positions: [{ id: "a", x: CENTER.x, y: CENTER.y }] });
+    await renderGame({ positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }] });
 
     fireEvent.click(castBtn());
     await advance(700); // 예신(nibble) 단계 진입(본신 전)
@@ -337,7 +337,7 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     // 초반 굴림(진입/첫 재굴림)은 모두 실패시키고, 이후 재굴림에서 성공하게 한다.
     let n = 0;
     await renderGame({
-      positions: [{ id: "a", x: CENTER.x, y: CENTER.y }],
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
       rng: () => (n++ < 2 ? 0.99 : 0),
     });
 
@@ -373,6 +373,120 @@ describe("FishTank 낚시 미니게임 (SPEC-CATCH-001)", () => {
     expect(screen.queryByRole("status", { name: "낚시 안내" })).toBeNull();
     // 어항 캔버스 자체는 감상 모드에서도 그대로 렌더된다.
     expect(screen.getByLabelText("어항")).toBeInTheDocument();
+  });
+
+  it("낚시 모드에서는 수면에 배+낚시꾼 장식 레이어가 렌더된다 (낚싯줄이 손끝에서 나오는 연출)", async () => {
+    await renderGame();
+    const boat = screen.getByTestId("fishing-boat");
+    expect(boat).toBeInTheDocument();
+    // 순수 장식이므로 스크린리더에는 숨긴다.
+    expect(boat).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("공유 어항(fishing 미지정)에서는 배+낚시꾼 레이어가 존재하지 않는다 — 낚시 탭 전용", async () => {
+    const { connect } = fakeConnect();
+    const loadSnapshot = vi.fn().mockResolvedValue([]);
+    render(
+      <FishTank
+        token="tok-abc"
+        loadSnapshot={loadSnapshot}
+        connect={connect}
+        getSpritePositions={() => []}
+      />,
+    );
+    await advance(0);
+    expect(screen.queryByTestId("fishing-boat")).toBeNull();
+  });
+
+  it("본신 중 스페이스가 한 틱에 겹쳐 들어와도 catchFish 는 한 번만 호출된다 — 이중 챔질 방지", async () => {
+    const { catchFish } = await renderGame({
+      positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }],
+    });
+
+    fireEvent.click(castBtn());
+    await advanceToStrike(); // 본신(챔질 창) 진입
+    expect(reelBtn()).toBeEnabled();
+
+    // 리렌더로 phase 가 CAUGHT 로 갱신되기 전에 스페이스 두 번이 같은 act(한 틱) 안에서 겹쳐 들어오는
+    // 오토리핏/연타 상황을 재현한다. 동기 가드가 없으면 두 번 모두 phase===BITING 으로 보여 이중 호출된다.
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space" }));
+    });
+    await advance(0); // catchFish 응답 flush
+
+    expect(catchFish).toHaveBeenCalledTimes(1);
+    expect(catchFish).toHaveBeenCalledWith({ token: "tok-abc", id: "a" });
+  });
+});
+
+// 배 좌우 이동 + 수직 캐스트 (방향키/드래그로 배를 옮기고, 던지면 배 바로 아래로 수직 낙하).
+describe("FishTank 낚시 배 이동 + 수직 캐스트", () => {
+  // 배 드래그 히트영역의 style.left = effectiveBoatX - 20. 이 좌표로 배 x 변화를 관찰한다.
+  const boatLeft = () => parseFloat(screen.getByTestId("boat-drag-handle").style.left);
+
+  it("방향키 ←/→ 로 배 x 가 바뀌고, 좌우 경계에서 clamp 된다", async () => {
+    await renderGame();
+    // 기본 위치: effectiveBoatX = 754 → 핸들 left = 734.
+    expect(boatLeft()).toBe(734);
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(boatLeft()).toBe(734 - BOAT_KEY_STEP); // 좌로 한 칸
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(boatLeft()).toBe(734); // 다시 우로 한 칸(원위치)
+
+    // 오른쪽으로 계속 눌러도 기본 위치(=최대, width - ROD_TIP_MARGIN_RIGHT=754)를 넘지 않는다.
+    for (let i = 0; i < 40; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(boatLeft()).toBe(734);
+
+    // 왼쪽으로 계속 눌러도 최소 경계(BOAT_EDGE_MARGIN_LEFT=16)에서 멈춘다 → 핸들 left = -4.
+    for (let i = 0; i < 60; i += 1) fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(boatLeft()).toBe(16 - 20);
+  });
+
+  it("A/D 키로도 배가 좌우로 움직인다(대소문자 무관)", async () => {
+    await renderGame();
+    expect(boatLeft()).toBe(734); // 기본 위치
+
+    fireEvent.keyDown(window, { key: "a" }); // 좌로 한 칸
+    expect(boatLeft()).toBe(734 - BOAT_KEY_STEP);
+
+    fireEvent.keyDown(window, { key: "D" }); // 대문자도 우로 한 칸
+    expect(boatLeft()).toBe(734);
+  });
+
+  it("던지면 찌가 배 x 바로 아래로 수직 낙하한다 — 배를 옮긴 위치의 물고기가 입질한다", async () => {
+    // 배를 왼쪽으로 3칸(=84px) 옮긴 위치(754-84=670)에만 물고기를 둔다.
+    const { catchFish } = await renderGame({
+      positions: [{ id: "a", x: 754 - 3 * BOAT_KEY_STEP, y: 225 }],
+    });
+
+    for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowLeft" });
+
+    // 방향키로 옮긴 뒤 스페이스로 던진다(수직 캐스트) → 옮긴 위치 물고기가 입질해야 한다.
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    await advanceToStrike();
+    expect(reelBtn()).toBeEnabled();
+
+    // 본신에서 스페이스로 챔질 → 옮긴 위치의 물고기 id 로 잡힌다(캐스트 x = 배 x 임을 확인).
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    await advance(0);
+    expect(catchFish).toHaveBeenCalledWith({ token: "tok-abc", id: "a" });
+  });
+
+  it("찌가 나가 있는 동안(IDLE 아님)에는 배 이동을 잠근다 — 방향키/드래그 모두 무시", async () => {
+    await renderGame({ positions: [{ id: "a", x: UNDER_BOAT.x, y: UNDER_BOAT.y }] });
+
+    fireEvent.click(castBtn()); // 던짐 → phase 가 IDLE 이 아니게 된다
+    const before = boatLeft();
+
+    // 던진 상태에서 방향키는 배를 움직이지 않는다.
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(boatLeft()).toBe(before);
+
+    // 드래그 히트영역도 잠겨 포인터 이벤트를 받지 않는다.
+    expect(screen.getByTestId("boat-drag-handle").style.pointerEvents).toBe("none");
   });
 });
 
